@@ -1,0 +1,842 @@
+{
+  "info": {
+    "name": "Al-Qadar ERP API",
+    "description": "End-to-end test collection for the Al-Qadar ERP backend (Super Admin / Admin / Merchant, Employee Management, Loan, Expense, Provident Fund, Attendance, Finance). Import this file plus the companion environment file, select the environment, run `yarn seed:super-admin` once against a running MongoDB, then run this collection top-to-bottom via the Collection Runner. Requests are ordered so each one's output (ids/tokens) feeds the next via environment variables — no manual copy-pasting needed. The 'Cleanup' folder at the end is NOT part of the main flow — run it manually only if you want to exercise the delete/soft-delete endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "00 - Auth",
+      "item": [
+        {
+          "name": "Login - Super Admin",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "pm.test('login succeeded', () => pm.expect(res.success).to.eql(true));",
+            "if (res && res.result && res.result.token) { pm.environment.set('superAdminToken', res.result.token); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"email\": \"{{superAdminEmail}}\",\n  \"password\": \"{{superAdminPassword}}\",\n  \"portal\": \"super_admin\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/auth/login","host":["{{baseUrl}}"],"path":["auth","login"]}
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{superAdminToken}}","type":"string"}]},
+            "header": [],
+            "url": {"raw":"{{baseUrl}}/auth/logout","host":["{{baseUrl}}"],"path":["auth","logout"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 - Admin Management (Super Admin only)",
+      "item": [
+        {
+          "name": "Create Admin",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "pm.test('admin created', () => pm.expect(res.success).to.eql(true));",
+            "if (res && res.result && res.result.id) { pm.environment.set('adminId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{superAdminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"name\": \"Priya Sharma\",\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\",\n  \"phone\": \"+91-9876543210\",\n  \"companyName\": \"Priya Retail Group\",\n  \"country\": \"India\",\n  \"city\": \"Mumbai\",\n  \"address\": \"221 MG Road\",\n  \"taxNumber\": \"TAX-ADM-0001\",\n  \"website\": \"https://priyaretail.example.com\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/admin","host":["{{baseUrl}}"],"path":["admin"]}
+          }
+        },
+        {
+          "name": "Login - Admin",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "pm.test('login succeeded', () => pm.expect(res.success).to.eql(true));",
+            "if (res && res.result && res.result.token) { pm.environment.set('adminToken', res.result.token); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\",\n  \"portal\": \"admin\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/auth/login","host":["{{baseUrl}}"],"path":["auth","login"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Merchant Management",
+      "item": [
+        {
+          "name": "Create Merchant (assigned to Admin, by Super Admin)",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "pm.test('merchant created', () => pm.expect(res.success).to.eql(true));",
+            "if (res && res.result && res.result.id) { pm.environment.set('merchantId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{superAdminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"name\": \"Green Mart LLC\",\n  \"email\": \"{{merchantEmail}}\",\n  \"password\": \"{{merchantPassword}}\",\n  \"phone\": \"+91-9876500000\",\n  \"companyName\": \"Green Mart LLC\",\n  \"businessCategory\": \"Retail\",\n  \"country\": \"India\",\n  \"city\": \"Mumbai\",\n  \"address\": \"14 Commercial Street\",\n  \"taxNumber\": \"TAX-MER-0001\",\n  \"website\": \"https://greenmart.example.com\",\n  \"adminId\": \"{{adminId}}\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/merchant","host":["{{baseUrl}}"],"path":["merchant"]}
+          }
+        },
+        {
+          "name": "Login - Merchant",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "pm.test('login succeeded', () => pm.expect(res.success).to.eql(true));",
+            "if (res && res.result && res.result.token) { pm.environment.set('merchantToken', res.result.token); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"email\": \"{{merchantEmail}}\",\n  \"password\": \"{{merchantPassword}}\",\n  \"portal\": \"merchant\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/auth/login","host":["{{baseUrl}}"],"path":["auth","login"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Department",
+      "item": [
+        {
+          "name": "Create Department",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('departmentId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"name\": \"Engineering\",\n  \"departmentCode\": \"ENG\",\n  \"description\": \"Product engineering team\",\n  \"location\": \"HQ - Floor 3\",\n  \"establishedDate\": \"2020-01-01\",\n  \"status\": \"Active\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/department","host":["{{baseUrl}}"],"path":["department"]}
+          }
+        },
+        {
+          "name": "List Departments",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/department?page=1&limit=10","host":["{{baseUrl}}"],"path":["department"],"query":[{"key":"page","value":"1"},{"key":"limit","value":"10"}]}
+          }
+        },
+        {
+          "name": "Get Department By Id",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/department/{{departmentId}}","host":["{{baseUrl}}"],"path":["department","{{departmentId}}"]}
+          }
+        },
+        {
+          "name": "Update Department",
+          "request": {
+            "method": "PUT",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"description\": \"Product engineering & platform team\",\n  \"location\": \"HQ - Floor 4\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/department/{{departmentId}}","host":["{{baseUrl}}"],"path":["department","{{departmentId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Designation",
+      "item": [
+        {
+          "name": "Create Designation",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('designationId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"title\": \"Senior Software Engineer\",\n  \"code\": \"SSE\",\n  \"shortName\": \"Sr. SWE\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"level\": \"Staff\",\n  \"grade\": \"G-3\",\n  \"minSalary\": 80000,\n  \"maxSalary\": 150000,\n  \"overtimeRate\": 500,\n  \"currency\": \"SAR\",\n  \"status\": \"Active\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/designation","host":["{{baseUrl}}"],"path":["designation"]}
+          }
+        },
+        {
+          "name": "List Designations",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/designation","host":["{{baseUrl}}"],"path":["designation"]}
+          }
+        },
+        {
+          "name": "Get Designation By Id",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/designation/{{designationId}}","host":["{{baseUrl}}"],"path":["designation","{{designationId}}"]}
+          }
+        },
+        {
+          "name": "Update Designation",
+          "request": {
+            "method": "PUT",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"maxSalary\": 160000\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/designation/{{designationId}}","host":["{{baseUrl}}"],"path":["designation","{{designationId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Shift",
+      "item": [
+        {
+          "name": "Create Shift",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('shiftId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"name\": \"General Day Shift\",\n  \"start\": \"09:00\",\n  \"end\": \"18:00\",\n  \"breakMinutes\": 60\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/shift","host":["{{baseUrl}}"],"path":["shift"]}
+          }
+        },
+        {
+          "name": "List Shifts",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/shift","host":["{{baseUrl}}"],"path":["shift"]}
+          }
+        },
+        {
+          "name": "Get Shift By Id",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/shift/{{shiftId}}","host":["{{baseUrl}}"],"path":["shift","{{shiftId}}"]}
+          }
+        },
+        {
+          "name": "Update Shift",
+          "request": {
+            "method": "PUT",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"breakMinutes\": 45\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/shift/{{shiftId}}","host":["{{baseUrl}}"],"path":["shift","{{shiftId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Employee",
+      "item": [
+        {
+          "name": "Create Employee",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "pm.test('employee created', () => pm.expect(res.success).to.eql(true));",
+            "if (res && res.result && res.result.id) { pm.environment.set('employeeId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"first_name\": \"Arjun\",\n  \"last_name\": \"Mehta\",\n  \"email\": \"arjun.mehta@example.com\",\n  \"phone\": \"+91-9876512345\",\n  \"gender\": \"male\",\n  \"dob\": \"1994-05-12\",\n  \"address\": \"12 Park Lane, Mumbai\",\n  \"emergency_contact\": \"+91-9876554321\",\n  \"blood_group\": \"O+\",\n  \"marital_status\": \"single\",\n  \"nationality\": \"Indian\",\n  \"national_id\": \"AB1234567\",\n  \"national_id_expiry\": \"2030-01-01\",\n  \"nationality_type\": \"Expatriate\",\n  \"departmentId\": \"{{departmentId}}\",\n  \"designationId\": \"{{designationId}}\",\n  \"shiftId\": \"{{shiftId}}\",\n  \"joining_date\": \"2023-06-01\",\n  \"work_location\": \"HQ - Mumbai\",\n  \"employment_type\": \"permanent\",\n  \"status\": \"active\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/employee","host":["{{baseUrl}}"],"path":["employee"]}
+          }
+        },
+        {
+          "name": "List Employees (own scope, default)",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/employee","host":["{{baseUrl}}"],"path":["employee"]}
+          }
+        },
+        {
+          "name": "List Employees (Admin drilling into one Merchant)",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/employee?merchantId={{merchantId}}","host":["{{baseUrl}}"],"path":["employee"],"query":[{"key":"merchantId","value":"{{merchantId}}"}]}
+          }
+        },
+        {
+          "name": "Get Employee By Id",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/employee/{{employeeId}}","host":["{{baseUrl}}"],"path":["employee","{{employeeId}}"]}
+          }
+        },
+        {
+          "name": "Update Employee",
+          "request": {
+            "method": "PUT",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"work_location\": \"HQ - Mumbai - Tower B\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/employee/{{employeeId}}","host":["{{baseUrl}}"],"path":["employee","{{employeeId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Salary",
+      "item": [
+        {
+          "name": "Create Salary",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('salaryId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeId\": \"{{employeeId}}\",\n  \"basic_salary\": 50000,\n  \"allowances\": {\"hra\": 10000, \"medical_allowance\": 2000, \"transport_allowance\": 1500, \"food_allowance\": 1000, \"mobile_allowance\": 500, \"travel_allowance\": 0, \"other_allowances\": 0},\n  \"deductions\": {\"tax\": 3000, \"provident_fund\": 2500, \"loan_deduction\": 0, \"advance_salary\": 0, \"insurance_deduction\": 500, \"other_deductions\": 0},\n  \"bank_name\": \"HDFC Bank\",\n  \"branch_name\": \"Mumbai Main\",\n  \"branch_code\": \"HDFC0001234\",\n  \"account_no\": \"123456789012\",\n  \"ifsc\": \"HDFC0001234\",\n  \"pf_number\": \"PF-MUM-0001\",\n  \"payment_status\": \"pending\",\n  \"effective_from\": \"2023-06-01\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/salary","host":["{{baseUrl}}"],"path":["salary"]}
+          }
+        },
+        {
+          "name": "Get Current Salary",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/salary/employee/{{employeeId}}","host":["{{baseUrl}}"],"path":["salary","employee","{{employeeId}}"]}
+          }
+        },
+        {
+          "name": "Get Salary History",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/salary/employee/{{employeeId}}/history","host":["{{baseUrl}}"],"path":["salary","employee","{{employeeId}}","history"]}
+          }
+        },
+        {
+          "name": "Update Salary",
+          "request": {
+            "method": "PUT",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"basic_salary\": 55000\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/salary/{{salaryId}}","host":["{{baseUrl}}"],"path":["salary","{{salaryId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 - Loan",
+      "item": [
+        {
+          "name": "Apply Loan (HR-created -> starts Pending)",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('loanId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeId\": \"{{employeeId}}\",\n  \"loanType\": \"EMI Loan\",\n  \"loanPurpose\": \"Personal\",\n  \"loanAmount\": 60000,\n  \"interestPercent\": 5,\n  \"numberOfInstallments\": 6,\n  \"appliedVia\": \"hr\",\n  \"guarantor\": {\"name\": \"Rohit Verma\", \"contact\": \"+91-9998887777\", \"address\": \"Mumbai\"}\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan","host":["{{baseUrl}}"],"path":["loan"]}
+          }
+        },
+        {
+          "name": "Apply Loan (Self-Service -> starts Pending Manager)",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('loanIdSelfService', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeId\": \"{{employeeId}}\",\n  \"loanType\": \"Advance Salary\",\n  \"loanPurpose\": \"Medical\",\n  \"loanAmount\": 15000,\n  \"interestPercent\": 0,\n  \"numberOfInstallments\": 3,\n  \"appliedVia\": \"employee\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan","host":["{{baseUrl}}"],"path":["loan"]}
+          }
+        },
+        {
+          "name": "Manager Approve (self-service loan) -> Pending HR",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"comments\": \"Approved by manager\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanIdSelfService}}/manager-approve","host":["{{baseUrl}}"],"path":["loan","{{loanIdSelfService}}","manager-approve"]}
+          }
+        },
+        {
+          "name": "[Alt] Manager Reject (do not run right after Manager Approve above)",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"rejectionReason\": \"Insufficient justification\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanIdSelfService}}/manager-reject","host":["{{baseUrl}}"],"path":["loan","{{loanIdSelfService}}","manager-reject"]}
+          }
+        },
+        {
+          "name": "HR Approve (self-service loan) -> Approved",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"comments\": \"Approved by HR\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanIdSelfService}}/hr-approve","host":["{{baseUrl}}"],"path":["loan","{{loanIdSelfService}}","hr-approve"]}
+          }
+        },
+        {
+          "name": "[Alt] HR Reject",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"rejectionReason\": \"Not eligible at this time\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanId}}/hr-reject","host":["{{baseUrl}}"],"path":["loan","{{loanId}}","hr-reject"]}
+          }
+        },
+        {
+          "name": "HR Approve (HR-created loan, was already Pending) -> Approved",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"comments\": \"Approved by HR\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanId}}/hr-approve","host":["{{baseUrl}}"],"path":["loan","{{loanId}}","hr-approve"]}
+          }
+        },
+        {
+          "name": "Disburse Loan -> Ongoing + posts Finance journal entry",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanId}}/disburse","host":["{{baseUrl}}"],"path":["loan","{{loanId}}","disburse"]}
+          }
+        },
+        {
+          "name": "Record Repayment (Installment 1) -> posts reverse Finance entry",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanId}}/repayment/1","host":["{{baseUrl}}"],"path":["loan","{{loanId}}","repayment","1"]}
+          }
+        },
+        {
+          "name": "Pre-Close remaining balance -> Completed",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanId}}/preclose","host":["{{baseUrl}}"],"path":["loan","{{loanId}}","preclose"]}
+          }
+        },
+        {
+          "name": "List Loans",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/loan","host":["{{baseUrl}}"],"path":["loan"]}
+          }
+        },
+        {
+          "name": "Get Loan By Id",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/loan/{{loanId}}","host":["{{baseUrl}}"],"path":["loan","{{loanId}}"]}
+          }
+        },
+        {
+          "name": "Get Loans By Employee",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/loan/employee/{{employeeId}}","host":["{{baseUrl}}"],"path":["loan","employee","{{employeeId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 - Expense",
+      "item": [
+        {
+          "name": "Apply Expense (HR-created -> auto Approved)",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('expenseId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeId\": \"{{employeeId}}\",\n  \"expenseType\": \"travel_transportation\",\n  \"expenseDate\": \"2025-03-15\",\n  \"amount\": 2500,\n  \"currency\": \"SAR\",\n  \"paymentMethod\": \"Card\",\n  \"description\": \"Client site visit travel\",\n  \"appliedVia\": \"hr\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/expense","host":["{{baseUrl}}"],"path":["expense"]}
+          }
+        },
+        {
+          "name": "Apply Expense (Self-Service -> starts Pending Manager)",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('expenseIdSelfService', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeId\": \"{{employeeId}}\",\n  \"expenseType\": \"office_supplies\",\n  \"expenseDate\": \"2025-03-16\",\n  \"amount\": 300,\n  \"currency\": \"SAR\",\n  \"paymentMethod\": \"Cash\",\n  \"description\": \"Stationery\",\n  \"appliedVia\": \"employee\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/expense","host":["{{baseUrl}}"],"path":["expense"]}
+          }
+        },
+        {
+          "name": "Manager Approve (self-service expense) -> Pending HR",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"comments\": \"Approved\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/expense/{{expenseIdSelfService}}/manager-approve","host":["{{baseUrl}}"],"path":["expense","{{expenseIdSelfService}}","manager-approve"]}
+          }
+        },
+        {
+          "name": "[Alt] Manager Reject",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"rejectionReason\": \"Missing receipt\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/expense/{{expenseIdSelfService}}/manager-reject","host":["{{baseUrl}}"],"path":["expense","{{expenseIdSelfService}}","manager-reject"]}
+          }
+        },
+        {
+          "name": "HR Approve (self-service expense) -> Approved",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"comments\": \"Approved by HR\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/expense/{{expenseIdSelfService}}/hr-approve","host":["{{baseUrl}}"],"path":["expense","{{expenseIdSelfService}}","hr-approve"]}
+          }
+        },
+        {
+          "name": "[Alt] HR Reject",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"rejectionReason\": \"Policy limit exceeded\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/expense/{{expenseIdSelfService}}/hr-reject","host":["{{baseUrl}}"],"path":["expense","{{expenseIdSelfService}}","hr-reject"]}
+          }
+        },
+        {
+          "name": "Mark Reimbursed (HR-created expense) -> posts Finance journal entry",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/expense/{{expenseId}}/reimburse","host":["{{baseUrl}}"],"path":["expense","{{expenseId}}","reimburse"]}
+          }
+        },
+        {
+          "name": "Mark Reimbursed (self-service expense) -> posts Finance journal entry",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/expense/{{expenseIdSelfService}}/reimburse","host":["{{baseUrl}}"],"path":["expense","{{expenseIdSelfService}}","reimburse"]}
+          }
+        },
+        {
+          "name": "List Expenses",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/expense","host":["{{baseUrl}}"],"path":["expense"]}
+          }
+        },
+        {
+          "name": "Get Expense By Id",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/expense/{{expenseId}}","host":["{{baseUrl}}"],"path":["expense","{{expenseId}}"]}
+          }
+        },
+        {
+          "name": "Get Expenses By Employee",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/expense/employee/{{employeeId}}","host":["{{baseUrl}}"],"path":["expense","employee","{{employeeId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - Provident Fund",
+      "item": [
+        {
+          "name": "Create/Update PF Policy (upsert, one per tenant)",
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeRate\": 8,\n  \"employerRate\": 12,\n  \"minServiceMonths\": 6,\n  \"vestingYears\": 3,\n  \"interestRate\": 8.5\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/pf-policy","host":["{{baseUrl}}"],"path":["pf-policy"]}
+          }
+        },
+        {
+          "name": "Get Current PF Policy",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/pf-policy/current","host":["{{baseUrl}}"],"path":["pf-policy","current"]}
+          }
+        },
+        {
+          "name": "Post Monthly Contribution -> posts Finance journal entry (employer portion)",
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeId\": \"{{employeeId}}\",\n  \"month\": \"2025-03\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/pf-contribution","host":["{{baseUrl}}"],"path":["pf-contribution"]}
+          }
+        },
+        {
+          "name": "Get PF Account By Employee",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/pf-account/employee/{{employeeId}}","host":["{{baseUrl}}"],"path":["pf-account","employee","{{employeeId}}"]}
+          }
+        },
+        {
+          "name": "Get Contribution History By Employee",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/pf-contribution/employee/{{employeeId}}","host":["{{baseUrl}}"],"path":["pf-contribution","employee","{{employeeId}}"]}
+          }
+        },
+        {
+          "name": "Apply Withdrawal",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('pfWithdrawalId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeId\": \"{{employeeId}}\",\n  \"amount\": 1000,\n  \"reason\": \"Medical emergency\",\n  \"type\": \"Partial\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/pf-withdrawal","host":["{{baseUrl}}"],"path":["pf-withdrawal"]}
+          }
+        },
+        {
+          "name": "Approve Withdrawal",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/pf-withdrawal/{{pfWithdrawalId}}/approve","host":["{{baseUrl}}"],"path":["pf-withdrawal","{{pfWithdrawalId}}","approve"]}
+          }
+        },
+        {
+          "name": "[Alt] Reject Withdrawal",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"remarks\": \"Balance insufficient for full withdrawal\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/pf-withdrawal/{{pfWithdrawalId}}/reject","host":["{{baseUrl}}"],"path":["pf-withdrawal","{{pfWithdrawalId}}","reject"]}
+          }
+        },
+        {
+          "name": "Mark Withdrawal Paid -> posts Finance journal entry",
+          "request": {
+            "method": "PATCH",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/pf-withdrawal/{{pfWithdrawalId}}/mark-paid","host":["{{baseUrl}}"],"path":["pf-withdrawal","{{pfWithdrawalId}}","mark-paid"]}
+          }
+        },
+        {
+          "name": "List Withdrawals",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/pf-withdrawal","host":["{{baseUrl}}"],"path":["pf-withdrawal"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Attendance",
+      "item": [
+        {
+          "name": "Create Attendance Policy",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('attendancePolicyId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"name\": \"Standard Policy 2025\",\n  \"implementedDate\": \"2025-01-01\",\n  \"shiftId\": \"{{shiftId}}\",\n  \"salaryCalculationDays\": 30,\n  \"weeklyOffDays\": [\"fri\", \"sat\"],\n  \"notes\": \"Default company-wide attendance policy\",\n  \"rules\": {\n    \"alwaysPresent\": false,\n    \"lateGraceMinutes\": 10,\n    \"earlyGraceMinutes\": 10,\n    \"deductionPerMinute\": 5,\n    \"managerApprovalEnabled\": true,\n    \"managerLateFullDay\": false,\n    \"managerEarlyFullDay\": false\n  }\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/attendance-policy","host":["{{baseUrl}}"],"path":["attendance-policy"]}
+          }
+        },
+        {
+          "name": "Get Current Policy",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/attendance-policy/current","host":["{{baseUrl}}"],"path":["attendance-policy","current"]}
+          }
+        },
+        {
+          "name": "List Policies (history)",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/attendance-policy","host":["{{baseUrl}}"],"path":["attendance-policy"]}
+          }
+        },
+        {
+          "name": "Update Policy (only while current)",
+          "request": {
+            "method": "PUT",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"notes\": \"Updated grace period for Ramadan hours\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/attendance-policy/{{attendancePolicyId}}","host":["{{baseUrl}}"],"path":["attendance-policy","{{attendancePolicyId}}"]}
+          }
+        },
+        {
+          "name": "Mark Attendance (Single)",
+          "event": [{"listen":"test","script":{"type":"text/javascript","exec":[
+            "const res = pm.response.json();",
+            "if (res && res.result && res.result.id) { pm.environment.set('attendanceId', res.result.id); }"
+          ]}}],
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeId\": \"{{employeeId}}\",\n  \"date\": \"2025-03-17\",\n  \"status\": \"Present\",\n  \"checkIn\": \"09:05\",\n  \"checkOut\": \"18:10\",\n  \"shiftType\": \"Day\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/attendance","host":["{{baseUrl}}"],"path":["attendance"]}
+          }
+        },
+        {
+          "name": "Bulk Mark Attendance (whole team, date range)",
+          "request": {
+            "method": "POST",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"employeeIds\": [\"{{employeeId}}\"],\n  \"startDate\": \"2025-03-18\",\n  \"endDate\": \"2025-03-20\",\n  \"status\": \"Present\",\n  \"shiftType\": \"Day\",\n  \"checkIn\": \"09:00\",\n  \"checkOut\": \"18:00\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/attendance/bulk","host":["{{baseUrl}}"],"path":["attendance","bulk"]}
+          }
+        },
+        {
+          "name": "List Attendance (by employee + month/year)",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/attendance?employeeId={{employeeId}}&month=3&year=2025","host":["{{baseUrl}}"],"path":["attendance"],"query":[{"key":"employeeId","value":"{{employeeId}}"},{"key":"month","value":"3"},{"key":"year","value":"2025"}]}
+          }
+        },
+        {
+          "name": "Get Monthly Summary",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/attendance/summary/{{employeeId}}?month=3&year=2025","host":["{{baseUrl}}"],"path":["attendance","summary","{{employeeId}}"],"query":[{"key":"month","value":"3"},{"key":"year","value":"2025"}]}
+          }
+        },
+        {
+          "name": "Get Attendance By Id",
+          "request": {
+            "method": "GET",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/attendance/{{attendanceId}}","host":["{{baseUrl}}"],"path":["attendance","{{attendanceId}}"]}
+          }
+        },
+        {
+          "name": "Update Attendance (correction)",
+          "request": {
+            "method": "PUT",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "header": [{"key":"Content-Type","value":"application/json"}],
+            "body": {"mode":"raw","raw":"{\n  \"notes\": \"Corrected check-out time\",\n  \"checkOut\": \"18:30\"\n}","options":{"raw":{"language":"json"}}},
+            "url": {"raw":"{{baseUrl}}/attendance/{{attendanceId}}","host":["{{baseUrl}}"],"path":["attendance","{{attendanceId}}"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "99 - Cleanup (Optional - run manually, not part of the main flow)",
+      "item": [
+        {
+          "name": "Delete Attendance",
+          "request": {
+            "method": "DELETE",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/attendance/{{attendanceId}}","host":["{{baseUrl}}"],"path":["attendance","{{attendanceId}}"]}
+          }
+        },
+        {
+          "name": "Delete Employee",
+          "request": {
+            "method": "DELETE",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/employee/{{employeeId}}","host":["{{baseUrl}}"],"path":["employee","{{employeeId}}"]}
+          }
+        },
+        {
+          "name": "Delete Shift",
+          "request": {
+            "method": "DELETE",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/shift/{{shiftId}}","host":["{{baseUrl}}"],"path":["shift","{{shiftId}}"]}
+          }
+        },
+        {
+          "name": "Delete Designation",
+          "request": {
+            "method": "DELETE",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/designation/{{designationId}}","host":["{{baseUrl}}"],"path":["designation","{{designationId}}"]}
+          }
+        },
+        {
+          "name": "Delete Department",
+          "request": {
+            "method": "DELETE",
+            "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{adminToken}}","type":"string"}]},
+            "url": {"raw":"{{baseUrl}}/department/{{departmentId}}","host":["{{baseUrl}}"],"path":["department","{{departmentId}}"]}
+          }
+        }
+      ]
+    }
+  ]
+}

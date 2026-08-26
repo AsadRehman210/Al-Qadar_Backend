@@ -1,0 +1,220 @@
+import { Request, Response } from "express";
+import * as customerService from "../../service/sales/customer-service";
+import { success, error, pagination } from "../../utility/helper/common";
+import { Messages } from "../../utility/helper/constants/message";
+import * as Enums from "../../utility/helper/constants/enum";
+import { resolveTenantScope, buildScopeFilter, RequestUser } from "../../utility/helper/tenant-scope";
+
+const create = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    if (!req.body.name || !req.body.phone || !req.body.address) {
+      return res.json(error(Messages.MSG_INVALID_DATA, Enums.ErrorCode.failed));
+    }
+    const user = req.user as RequestUser;
+    const scope = resolveTenantScope(user, req.body);
+    const result = await customerService.create(req.body, scope, user.id);
+
+    if (result.errorCode === "duplicate_phone") {
+      return res.json(error(Messages.MSG_DUPLICATE_PHONE, Enums.ErrorCode.duplicate_entry));
+    }
+    return res.json(success(Messages.MSG_SAVED, Enums.ErrorCode.success, result.result));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const getAll = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const query = req.query as {
+      page?: string;
+      limit?: string;
+      adminId?: string;
+      merchantId?: string;
+      search?: string;
+      customerType?: string;
+      status?: string;
+    };
+    const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
+    const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
+
+    const filter = buildScopeFilter(user, query);
+    const result = await customerService.getAll(filter, page, limit, {
+      search: query.search,
+      customerType: query.customerType,
+      status: query.status,
+    });
+
+    if (!result.result.length) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    return res.json(pagination(result.result, result.totalCount, page, limit));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const get = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
+    const result = await customerService.get(req.params.id, filter);
+
+    if (!result) {
+      return res.json(error(Messages.MSG_CUSTOMER_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    return res.json(success(Messages.MSG_DATA_FOUND, Enums.ErrorCode.success, result));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const update = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
+    const result = await customerService.update(req.params.id, req.body, filter);
+
+    if (result.errorCode === "not_found") {
+      return res.json(error(Messages.MSG_CUSTOMER_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "duplicate_phone") {
+      return res.json(error(Messages.MSG_DUPLICATE_PHONE, Enums.ErrorCode.duplicate_entry));
+    }
+    return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const deleteByID = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
+    const result = await customerService.deleteByID(req.params.id, filter);
+
+    if (result.errorCode === "not_found") {
+      return res.json(error(Messages.MSG_CUSTOMER_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    return res.json(success(Messages.MSG_CUSTOMER_DELETED, Enums.ErrorCode.success));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const getInvoices = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const query = req.query as {
+      page?: string;
+      limit?: string;
+      adminId?: string;
+      merchantId?: string;
+      fromDate?: string;
+      toDate?: string;
+      amount?: string;
+      invoiceNumber?: string;
+    };
+    const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
+    const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
+    const filter = buildScopeFilter(user, query);
+
+    const result = await customerService.getInvoices(req.params.id, filter, page, limit, {
+      fromDate: query.fromDate,
+      toDate: query.toDate,
+      amount: query.amount !== undefined && query.amount !== "" ? Number(query.amount) : undefined,
+      invoiceNumber: query.invoiceNumber,
+    });
+    if (!result.result.length) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    return res.json(pagination(result.result, result.totalCount, page, limit));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const getPayments = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const query = req.query as {
+      page?: string;
+      limit?: string;
+      adminId?: string;
+      merchantId?: string;
+      fromDate?: string;
+      toDate?: string;
+      amount?: string;
+      invoiceNumber?: string;
+    };
+    const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
+    const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
+    const filter = buildScopeFilter(user, query);
+
+    const result = await customerService.getPayments(req.params.id, filter, page, limit, {
+      fromDate: query.fromDate,
+      toDate: query.toDate,
+      amount: query.amount !== undefined && query.amount !== "" ? Number(query.amount) : undefined,
+      invoiceNumber: query.invoiceNumber,
+    });
+    if (!result.result.length) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    return res.json(pagination(result.result, result.totalCount, page, limit));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const getLedger = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const query = req.query as { page?: string; limit?: string; adminId?: string; merchantId?: string };
+    const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
+    const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
+    const filter = buildScopeFilter(user, query);
+
+    // Never errors out on an empty page — the opening balance is still
+    // meaningful (and must still render) even for a customer with zero
+    // invoices/payments yet, unlike the plain "no record" list endpoints.
+    const result = await customerService.getLedger(req.params.id, filter, page, limit);
+    return res.json({
+      ...pagination(result.result, result.totalCount, page, limit),
+      opening_balance: result.openingBalance,
+    });
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const getBalance = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
+    const balance = await customerService.getBalance(req.params.id, filter);
+
+    if (balance === null) {
+      return res.json(error(Messages.MSG_CUSTOMER_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    return res.json(success(Messages.MSG_DATA_FOUND, Enums.ErrorCode.success, { balance }));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const getDebitCreditSummary = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
+    const summary = await customerService.getDebitCreditSummary(req.params.id, filter);
+
+    if (!summary) {
+      return res.json(error(Messages.MSG_CUSTOMER_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    return res.json(success(Messages.MSG_DATA_FOUND, Enums.ErrorCode.success, summary));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+export { create, getAll, get, update, deleteByID, getInvoices, getPayments, getLedger, getBalance, getDebitCreditSummary };

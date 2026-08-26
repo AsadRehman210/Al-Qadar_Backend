@@ -1,0 +1,30 @@
+export interface supplierDto {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  emergencyPhone?: string | null;
+  address?: string | null;
+  country?: string | null;
+  city?: string | null;
+  supplierType?: string | null;
+  taxNumber?: string | null;
+  registrationNumber?: string | null;
+  licenseNumber?: string | null;
+  licenseExpiryDate?: string | null;
+  contactPersonName?: string | null;
+  contactPersonPhone?: string | null;
+  contactPersonEmail?: string | null;
+  contactPersonDesignation?: string | null;
+  bankName?: string | null;
+  accountTitle?: string | null;
+  accountNumber?: string | null;
+  iban?: string | null;
+  branchCode?: string | null;
+  swift?: string | null;
+  openingBalance?: number | null;
+  status?: string | null;
+  currentBalance?: number | null;
+  createdAt?: Date | null;
+  updatedAt?: Date | null;
+}
