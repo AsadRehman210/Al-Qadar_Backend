@@ -52,6 +52,12 @@ export interface IPurchaseInvoiceModel extends Document {
   subtotal?: number | null;
   taxPercent?: number | null;
   taxAmount?: number | null;
+  // Whether this invoice's tax is a recoverable input-VAT credit (true,
+  // default — folds into VAT Receivable at Received, product cost stays
+  // net-of-tax) or a blocked/non-recoverable cost (false — folds into
+  // product cost/COGS instead, no VAT Receivable posted). Set at creation,
+  // locked once Received.
+  taxRecoverable?: boolean | null;
   total?: number | null;
   status?: PurchaseStatus | null;
   stockApplied?: boolean | null;
@@ -109,6 +115,7 @@ const purchaseInvoiceSchema: Schema<IPurchaseInvoiceModel> = new Schema(
     subtotal: { type: Number, default: 0 },
     taxPercent: { type: Number, default: 0 },
     taxAmount: { type: Number, default: 0 },
+    taxRecoverable: { type: Boolean, default: true },
     total: { type: Number, default: 0 },
     status: { type: String, enum: ["Draft", "Ordered", "Transit", "Received"], default: "Draft" },
     // Guards the receive-stock effect so it only ever fires once.

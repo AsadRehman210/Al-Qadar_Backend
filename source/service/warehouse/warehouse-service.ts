@@ -1,4 +1,5 @@
 import { WarehouseModel } from "../../model/warehouse/warehouse-model";
+import { StockLevelModel } from "../../model/warehouse/stock-level-model";
 import { TenantScope } from "../../utility/helper/tenant-scope";
 import { warehouseDto } from "../../utility/dtos/warehouse/warehouse-dto";
 import { mapDbToDto, mapDbListToDtoList } from "../../utility/mapper/warehouse/warehouse-mapper";
@@ -11,7 +12,6 @@ export interface WarehouseListOptions {
 }
 
 interface CreateWarehouseInput {
-  code: string;
   name: string;
   location?: string;
   manager?: string;
@@ -26,22 +26,28 @@ interface WarehouseResult {
   result: warehouseDto | null;
 }
 
+// Tenant-scoped, gap-safe: based on the highest existing numeric suffix for
+// this adminId/merchantId, not a plain count — a warehouse can be deleted
+// (see deleteByID below), so a count-based scheme could regenerate a code
+// that collides with one still in use.
+const generateWarehouseCode = async (scope: TenantScope): Promise<string> => {
+  const last = await WarehouseModel.findOne({ adminId: scope.adminId, merchantId: scope.merchantId })
+    .sort({ code: -1 })
+    .select("code")
+    .lean();
+  const lastNum = last?.code ? parseInt(last.code.replace(/\D/g, ""), 10) || 0 : 0;
+  return `WH-${String(lastNum + 1).padStart(4, "0")}`;
+};
+
 const create = async (
   data: CreateWarehouseInput,
   scope: TenantScope,
   createdBy: string
 ): Promise<WarehouseResult> => {
-  const existing = await WarehouseModel.findOne({
-    adminId: scope.adminId,
-    merchantId: scope.merchantId,
-    code: data.code,
-  }).select("_id").lean();
-  if (existing) {
-    return { errorCode: "duplicate_code", result: null };
-  }
+  const code = await generateWarehouseCode(scope);
 
   const warehouse = await WarehouseModel.create({
-    code: data.code,
+    code,
     name: data.name,
     location: data.location || null,
     manager: data.manager || null,
@@ -56,12 +62,40 @@ const create = async (
   return { errorCode: "success", result: mapDbToDto(warehouse) };
 };
 
+export interface WarehouseSummary {
+  totalWarehouses: number;
+  activeWarehouses: number;
+  totalCapacity: number;
+  totalStockItems: number;
+}
+
+// Filter-aware, not tenant-wide: computed over the exact same `query` as the
+// paginated list (search + status included) so the stat cards track whatever
+// the user is currently filtered to, not the whole tenant regardless of it.
+// Pulled from an unpaginated fetch of every matching warehouse rather than a
+// separate Mongo aggregation — one query, and capacity/active are then just
+// a JS reduce over a result set already small enough to hold in memory.
+const computeSummary = async (query: Record<string, unknown>): Promise<WarehouseSummary> => {
+  const matching = await WarehouseModel.find(query).select("_id status capacity").lean();
+
+  const totalWarehouses = matching.length;
+  const activeWarehouses = matching.filter((w) => w.status === "Active").length;
+  const totalCapacity = matching.reduce((sum, w) => sum + (w.capacity || 0), 0);
+
+  const warehouseIds = matching.map((w) => w._id);
+  const totalStockItems = warehouseIds.length
+    ? await StockLevelModel.countDocuments({ warehouseId: { $in: warehouseIds }, qty: { $gt: 0 } })
+    : 0;
+
+  return { totalWarehouses, activeWarehouses, totalCapacity, totalStockItems };
+};
+
 const getAll = async (
   filter: Record<string, unknown>,
   page: number,
   limit: number,
   options: WarehouseListOptions = {}
-): Promise<{ totalCount: number; result: warehouseDto[] }> => {
+): Promise<{ totalCount: number; result: warehouseDto[]; summary: WarehouseSummary }> => {
   const startIndex = (page - 1) * limit;
   const query = {
     ...filter,
@@ -69,10 +103,13 @@ const getAll = async (
     ...buildExactFilters(options as Record<string, unknown>, { status: "status" }),
   };
 
-  const data = await WarehouseModel.find(query).skip(startIndex).limit(limit).sort({ name: 1 }).lean();
-  const count = await WarehouseModel.countDocuments(query);
+  const [data, count, summary] = await Promise.all([
+    WarehouseModel.find(query).skip(startIndex).limit(limit).sort({ name: 1 }).lean(),
+    WarehouseModel.countDocuments(query),
+    computeSummary(query),
+  ]);
 
-  return { totalCount: count, result: mapDbListToDtoList(data) };
+  return { totalCount: count, result: mapDbListToDtoList(data), summary };
 };
 
 const get = async (id: string, filter: Record<string, unknown>): Promise<warehouseDto | null> => {
@@ -86,7 +123,6 @@ const get = async (id: string, filter: Record<string, unknown>): Promise<warehou
 // tenant ownership of the warehouse. Allowlisted instead of blocklisted so
 // a future schema field is safe-by-default (excluded) until explicitly added here.
 const UPDATABLE_FIELDS: (keyof CreateWarehouseInput)[] = [
-  "code",
   "name",
   "location",
   "manager",

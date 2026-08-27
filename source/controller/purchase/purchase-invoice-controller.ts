@@ -85,6 +85,46 @@ const getPayables = async (req: Request, res: Response): Promise<Response> => {
   }
 };
 
+// "Recoverable Tax" module — every Received invoice whose tax is a real
+// input-VAT credit, plus the true total across every matching invoice.
+const getRecoverableTaxReport = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const query = req.query as {
+      page?: string;
+      limit?: string;
+      adminId?: string;
+      merchantId?: string;
+      search?: string;
+      supplierId?: string;
+      fromDate?: string;
+      toDate?: string;
+    };
+    const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
+    const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
+
+    const filter = buildScopeFilter(user, query);
+    const result = await purchaseInvoiceService.getRecoverableTaxReport(filter, page, limit, {
+      search: query.search,
+      supplierId: query.supplierId,
+      fromDate: query.fromDate,
+      toDate: query.toDate,
+    });
+
+    return res.json(
+      success(Messages.MSG_DATA_FOUND, Enums.ErrorCode.success, {
+        result: result.result,
+        total_records: result.totalCount,
+        total_pages: Math.ceil(result.totalCount / limit) || 1,
+        page_number: page,
+        totalTaxAmount: result.totalTaxAmount,
+      })
+    );
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
 const get = async (req: Request, res: Response): Promise<Response> => {
   try {
     const user = req.user as RequestUser;
@@ -196,4 +236,4 @@ const deleteByID = async (req: Request, res: Response): Promise<Response> => {
   }
 };
 
-export { create, getAll, get, getPayables, update, updateStatus, addPayment, addRefund, deleteByID };
+export { create, getAll, get, getPayables, getRecoverableTaxReport, update, updateStatus, addPayment, addRefund, deleteByID };

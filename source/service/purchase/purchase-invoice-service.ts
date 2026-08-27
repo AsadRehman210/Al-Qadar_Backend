@@ -7,7 +7,7 @@ import { mapDbToDto, mapDbListToDtoList } from "../../utility/mapper/purchase/pu
 import { buildSearchCondition, buildExactFilters } from "../../utility/helper/list-query";
 import { adjustStock, getStockByVariant } from "../warehouse/stock-level-service";
 import { updateCostWeightedAverage } from "../inventory/variant-service";
-import { addStockBatch } from "../inventory/stock-batch-service";
+import { addStockBatch, updateBatchExpiryBySource } from "../inventory/stock-batch-service";
 import { createJournalEntry } from "../finance/journal-service";
 import { ensureAccountsPayable, ensureVatReceivable, ensureCostOfGoodsSold } from "../../utility/helper/finance-accounts";
 import { toDateOnly, formatDateOnly } from "../../utility/helper/date-only";
@@ -109,6 +109,12 @@ interface CreatePurchaseInvoiceInput {
   productType?: string;
   products: PurchaseLineInput[];
   taxPercent?: number;
+  // true (default) = a real recoverable input-VAT credit — landed unit cost
+  // stays net-of-tax, tax posts to VAT Receivable at Received. false = a
+  // blocked/non-recoverable cost — tax folds into the landed unit cost/COGS
+  // instead, no VAT Receivable line. Invoice-wide, set at creation, locked
+  // once Received (see updateStatus).
+  taxRecoverable?: boolean;
   notes?: string;
   currency?: string;
   status?: string;
@@ -144,12 +150,19 @@ const computeTotals = (products: PurchaseLineInput[], invoiceTaxPercent = 0) => 
 // receive step (updateStatus) reuses this same unitCost for the stock batch
 // instead of recomputing it, so two lines of the same variant at different
 // prices always land as two distinct batch costs — never collapsed to one.
-const withLineTaxAmounts = (products: PurchaseLineInput[], invoiceTaxPercent: number) =>
+//
+// unitCost only folds the tax in when it's NOT recoverable — a recoverable
+// tax is going to VAT Receivable, not staying with the goods, so Stock's own
+// landed cost should be net-of-tax; a non-recoverable tax is a real cost, so
+// it stays part of the goods' cost exactly like before this field existed.
+const withLineTaxAmounts = (products: PurchaseLineInput[], invoiceTaxPercent: number, taxRecoverable: boolean) =>
   products.map((line) => {
     const lineSubtotal = line.qty * line.price;
     const rate = effectiveLineTaxPercent(line, invoiceTaxPercent);
     const taxAmount = Math.round(lineSubtotal * (rate / 100) * 100) / 100;
-    const unitCost = Math.round(line.price * (1 + rate / 100) * 100) / 100;
+    const unitCost = taxRecoverable
+      ? Math.round(line.price * 100) / 100
+      : Math.round(line.price * (1 + rate / 100) * 100) / 100;
     return { ...line, taxAmount, unitCost };
   });
 
@@ -161,6 +174,7 @@ const create = async (
   createdBy: string
 ): Promise<PurchaseInvoiceResult> => {
   const invoiceNumber = await generateInvoiceNo(scope);
+  const taxRecoverable = data.taxRecoverable !== false;
   const { subtotal, taxAmount, total } = computeTotals(data.products, data.taxPercent || 0);
 
   const invoice = await PurchaseInvoiceModel.create({
@@ -171,10 +185,11 @@ const create = async (
     warehouseId: data.warehouseId,
     receiverName: data.receiverName || null,
     productType: data.productType || null,
-    products: withLineTaxAmounts(data.products, data.taxPercent || 0),
+    products: withLineTaxAmounts(data.products, data.taxPercent || 0, taxRecoverable),
     subtotal,
     taxPercent: data.taxPercent || 0,
     taxAmount,
+    taxRecoverable,
     total,
     status: data.status || "Draft",
     stockApplied: false,
@@ -215,9 +230,47 @@ const getAll = async (
 
   const result = mapDbListToDtoList(data);
   const debitedByInvoice = await getDebitedAmounts(result.map((r) => r.id));
-  for (const dto of result) applyReturnFigures(dto, debitedByInvoice.get(dto.id) || 0);
+  for (const dto of result) {
+    applyReturnFigures(dto, debitedByInvoice.get(dto.id) || 0);
+  }
 
   return { totalCount: count, result };
+};
+
+// The "Recoverable Tax" module's own view — every Received invoice whose
+// tax is a real input-VAT credit, with the total across every matching
+// invoice (not just the current page) so the report's headline number is
+// always the true total, not just what's on screen.
+const getRecoverableTaxReport = async (
+  filter: Record<string, unknown>,
+  page: number,
+  limit: number,
+  options: { search?: string; supplierId?: string; fromDate?: string; toDate?: string } = {}
+): Promise<{ totalCount: number; totalTaxAmount: number; result: purchaseInvoiceDto[] }> => {
+  const dateFilter: Record<string, unknown> = {};
+  if (options.fromDate) dateFilter.$gte = new Date(options.fromDate);
+  if (options.toDate) dateFilter.$lte = new Date(options.toDate);
+
+  const query = {
+    ...filter,
+    status: "Received",
+    taxRecoverable: { $ne: false },
+    taxAmount: { $gt: 0 },
+    ...buildSearchCondition(options.search, ["invoiceNumber"]),
+    ...buildExactFilters(options as Record<string, unknown>, { supplierId: "supplierId" }),
+    ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+  };
+
+  const startIndex = (page - 1) * limit;
+  let cursor = PurchaseInvoiceModel.find(query).skip(startIndex).limit(limit).sort({ date: -1 });
+  for (const [field, select] of POPULATE) cursor = cursor.populate(field, select) as any;
+  const data = await cursor.lean();
+  const count = await PurchaseInvoiceModel.countDocuments(query);
+
+  const allMatching = await PurchaseInvoiceModel.find(query).select("taxAmount").lean();
+  const totalTaxAmount = round2(allMatching.reduce((sum, i) => sum + (i.taxAmount || 0), 0));
+
+  return { totalCount: count, totalTaxAmount, result: mapDbListToDtoList(data) };
 };
 
 // The real Accounts Payable view — every Purchase Invoice actually still
@@ -302,6 +355,16 @@ const update = async (
   // else on the invoice (supplier, dates, products, notes, ...) stays
   // editable even after Received; only the status transition is locked.
 
+  // Captured before any field is touched — if this invoice was already
+  // Received, its StockBatch rows were written against these values, and
+  // that's what's needed below to find them again after products change.
+  const wasReceived = invoice.stockApplied;
+  const batchWarehouseId = String(invoice.warehouseId);
+  const scope: TenantScope = {
+    adminId: invoice.adminId ? String(invoice.adminId) : null,
+    merchantId: invoice.merchantId ? String(invoice.merchantId) : null,
+  };
+
   if (data.supplierId !== undefined) invoice.supplierId = data.supplierId as any;
   if (data.date !== undefined) invoice.date = toDateOnly(data.date);
   if (data.expectedDelivery !== undefined) invoice.expectedDelivery = data.expectedDelivery ? toDateOnly(data.expectedDelivery) : null;
@@ -309,10 +372,12 @@ const update = async (
   if (data.receiverName !== undefined) invoice.receiverName = data.receiverName;
   if (data.productType !== undefined) invoice.productType = data.productType;
   if (data.notes !== undefined) invoice.notes = data.notes;
+  if (data.taxRecoverable !== undefined) invoice.taxRecoverable = data.taxRecoverable;
   if (data.products !== undefined) {
     const effectiveTaxPercent = data.taxPercent ?? invoice.taxPercent ?? 0;
+    const effectiveTaxRecoverable = invoice.taxRecoverable !== false;
     const { subtotal, taxAmount, total } = computeTotals(data.products, effectiveTaxPercent);
-    invoice.products = withLineTaxAmounts(data.products, effectiveTaxPercent) as any;
+    invoice.products = withLineTaxAmounts(data.products, effectiveTaxPercent, effectiveTaxRecoverable) as any;
     invoice.taxPercent = effectiveTaxPercent;
     invoice.subtotal = subtotal;
     invoice.taxAmount = taxAmount;
@@ -320,6 +385,25 @@ const update = async (
   }
 
   await invoice.save();
+
+  // A line's expiryDate can still be edited after Received (see the comment
+  // above), but the StockBatch row that Received already wrote never picks
+  // that up on its own — sync it here so what Stock shows always matches
+  // what the invoice now says. Matched by (variant, warehouse, sourceRef),
+  // same key addStockBatch stamped the row with originally.
+  if (wasReceived && data.products !== undefined) {
+    for (const line of data.products) {
+      await updateBatchExpiryBySource(
+        scope,
+        String(line.variantId),
+        batchWarehouseId,
+        "Purchase Invoice",
+        invoice.invoiceNumber || "",
+        line.expiryDate
+      );
+    }
+  }
+
   await populateAll(invoice);
   return { errorCode: "success", result: mapDbToDto(invoice) };
 };
@@ -389,10 +473,21 @@ const updateStatus = async (
 
     const accountsPayable = await ensureAccountsPayable(scope, actor);
     const cogsAccount = await ensureCostOfGoodsSold(scope, actor);
+    // Recoverable (default): tax is a real input-VAT credit — debited to
+    // VAT Receivable, separate from COGS. Non-recoverable: the tax is a real
+    // cost with nowhere else to go, so it stays folded into COGS instead —
+    // no VAT Receivable line at all. Either way COGS + VAT debit == AP
+    // credit, so the entry always balances.
+    const taxRecoverable = invoice.taxRecoverable !== false;
     const vatLines = [];
+    let cogsDebit = invoice.subtotal || 0;
     if (invoice.taxAmount) {
-      const vatReceivable = await ensureVatReceivable(scope, actor);
-      vatLines.push({ accountId: String(vatReceivable._id), debit: invoice.taxAmount, credit: 0 });
+      if (taxRecoverable) {
+        const vatReceivable = await ensureVatReceivable(scope, actor);
+        vatLines.push({ accountId: String(vatReceivable._id), debit: invoice.taxAmount, credit: 0 });
+      } else {
+        cogsDebit += invoice.taxAmount;
+      }
     }
     await createJournalEntry({
       tenant: scope,
@@ -400,7 +495,7 @@ const updateStatus = async (
       date: new Date(),
       memo: `Purchase Invoice ${invoice.invoiceNumber}`,
       lines: [
-        { accountId: String(cogsAccount._id), debit: invoice.subtotal || 0, credit: 0 },
+        { accountId: String(cogsAccount._id), debit: cogsDebit, credit: 0 },
         ...vatLines,
         { accountId: String(accountsPayable._id), debit: 0, credit: invoice.total || 0 },
       ],
@@ -528,4 +623,4 @@ const deleteByID = async (id: string, filter: Record<string, unknown>): Promise<
   return { errorCode: "success", result: mapDbToDto(invoice) };
 };
 
-export { create, getAll, get, getPayables, getRawBySupplier, update, updateStatus, addPayment, addRefund, deleteByID };
+export { create, getAll, get, getPayables, getRecoverableTaxReport, getRawBySupplier, update, updateStatus, addPayment, addRefund, deleteByID };

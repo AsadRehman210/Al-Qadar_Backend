@@ -4,6 +4,7 @@ import {
   getAll,
   get,
   getReceivables,
+  getCollectedTaxReport,
   update,
   updateDeliveryStatus,
   addPayment,
@@ -23,6 +24,7 @@ saleInvoiceRoute
   .post("/", verifyToken, canWrite, create)
   .get("/", verifyToken, canRead, getAll)
   .get("/receivables", verifyToken, canRead, getReceivables)
+  .get("/collected-tax-report", verifyToken, canRead, getCollectedTaxReport)
   .get("/:id", verifyToken, canRead, get)
   .put("/:id", verifyToken, canWrite, update)
   .patch("/:id/delivery-status", verifyToken, canWrite, updateDeliveryStatus)

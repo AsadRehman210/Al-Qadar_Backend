@@ -16,6 +16,7 @@ const getAll = async (req: Request, res: Response): Promise<Response> => {
       variantId?: string;
       warehouseId?: string;
       onlyAvailable?: string;
+      sortId?: string;
     };
     const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
     const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
@@ -25,6 +26,7 @@ const getAll = async (req: Request, res: Response): Promise<Response> => {
       variantId: query.variantId,
       warehouseId: query.warehouseId,
       onlyAvailable: query.onlyAvailable === "true",
+      sortId: query.sortId,
     });
 
     if (!result.result.length) {

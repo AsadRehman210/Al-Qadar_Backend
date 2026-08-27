@@ -74,6 +74,12 @@ export interface purchaseInvoiceDto {
   // Every item returned via a linked (non-Voided) debit note, flattened
   // across all such notes — only populated on the single-record get().
   returnedItems?: purchaseReturnedItemDto[];
+  // Whether this invoice's tax is a real, recoverable input-VAT credit
+  // (folds into VAT Receivable, product cost stays net-of-tax) or a blocked/
+  // non-recoverable cost (folds into product cost/COGS instead, no VAT
+  // Receivable posted). Set once at creation, locked once Received — see
+  // updateStatus in purchase-invoice-service.ts for the posting split.
+  taxRecoverable?: boolean | null;
   notes?: string | null;
   currency?: string | null;
   createdAt?: Date | null;

@@ -7,7 +7,7 @@ import { resolveTenantScope, buildScopeFilter, RequestUser } from "../../utility
 
 const create = async (req: Request, res: Response): Promise<Response> => {
   try {
-    if (!req.body.code || !req.body.name) {
+    if (!req.body.name) {
       return res.json(error(Messages.MSG_INVALID_DATA, Enums.ErrorCode.failed));
     }
 
@@ -47,7 +47,7 @@ const getAll = async (req: Request, res: Response): Promise<Response> => {
     if (!result.result.length) {
       return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
     }
-    return res.json(pagination(result.result, result.totalCount, page, limit));
+    return res.json(pagination(result.result, result.totalCount, page, limit, result.summary));
   } catch (err: any) {
     return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
   }

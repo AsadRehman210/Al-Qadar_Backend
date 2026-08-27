@@ -49,7 +49,7 @@ const getAll = async (
     ...buildExactFilters(options as Record<string, unknown>, { status: "status" }),
   };
 
-  const data = await CategoryModel.find(query).skip(startIndex).limit(limit).sort({ name: 1 }).lean();
+  const data = await CategoryModel.find(query).skip(startIndex).limit(limit).sort({ _id: -1 }).lean();
   const count = await CategoryModel.countDocuments(query);
 
   return { totalCount: count, result: mapDbListToDtoList(data) };

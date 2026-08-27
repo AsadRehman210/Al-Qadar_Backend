@@ -51,6 +51,10 @@ interface ApiResponse {
   message?: string | null;
   error_message?: any | null;
   result?: any | null;
+  // Optional extra payload alongside a paginated `result` — e.g. filter-aware
+  // summary stats for a list's stat cards, computed over the same query as
+  // the page itself rather than requiring a separate endpoint/request.
+  misc_data?: any | null;
 }
 
 const createApiResponsePagination = (): ApiResponse => ({
@@ -63,6 +67,7 @@ const createApiResponsePagination = (): ApiResponse => ({
   message: null,
   error_message: null,
   result: null,
+  misc_data: null,
 });
 
 const createApiResponse = (): ApiResponse => ({
@@ -84,7 +89,13 @@ const success = <T>(message: string, error_code: ErrorCode, data?: T): ApiRespon
   return response;
 };
 
-const pagination = <T>(data: T, total_records: number, page: number, limit: number): ApiResponse => {
+const pagination = <T>(
+  data: T,
+  total_records: number,
+  page: number,
+  limit: number,
+  misc_data?: unknown
+): ApiResponse => {
   const response: ApiResponse = createApiResponsePagination();
   response.error_code = ErrorCode.success;
   response.success = true;
@@ -94,6 +105,7 @@ const pagination = <T>(data: T, total_records: number, page: number, limit: numb
   response.page_number = page;
   response.total_pages = Math.ceil(total_records / limit);
   response.result = stripUnchangedUpdatedAt(data);
+  if (misc_data !== undefined) response.misc_data = misc_data;
   return response;
 };
 

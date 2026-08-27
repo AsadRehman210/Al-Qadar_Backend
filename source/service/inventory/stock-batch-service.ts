@@ -68,11 +68,50 @@ const releaseBatch = async (batchId: string, qty: number): Promise<void> => {
   await batch.save();
 };
 
+// Purchase Invoice's update() lets a line's expiryDate keep changing even
+// after Received (see that function's own comment on why), but the batch
+// row it already wrote at Received-time never re-read that edit on its
+// own — this is what keeps the two in sync. Matched by (variant, warehouse,
+// sourceType, sourceRef) rather than a batch id, since the invoice itself
+// never stored which batch document it created.
+const updateBatchExpiryBySource = async (
+  scope: TenantScope,
+  variantId: string,
+  warehouseId: string,
+  sourceType: string,
+  sourceRef: string,
+  expiryDate: string | null | undefined
+): Promise<void> => {
+  await StockBatchModel.updateMany(
+    {
+      adminId: scope.adminId,
+      merchantId: scope.merchantId,
+      variantId,
+      warehouseId,
+      sourceType,
+      sourceRef,
+    },
+    { $set: { expiryDate: expiryDate ? toDateOnly(expiryDate) : null } }
+  );
+};
+
 export interface StockBatchListOptions {
   variantId?: string;
   warehouseId?: string;
   onlyAvailable?: boolean;
+  sortId?: string;
 }
+
+// Batch history's own sort control (Stock/Variant detail pages) — ignored
+// for the FEFO picker, which always sorts earliest-expiry-first regardless.
+const SORT_MAP: Record<string, Record<string, 1 | -1>> = {
+  expiry_asc: { expiryDate: 1 },
+  expiry_desc: { expiryDate: -1 },
+  cost_asc: { unitCost: 1 },
+  cost_desc: { unitCost: -1 },
+  stock_asc: { remainingQty: 1 },
+  stock_desc: { remainingQty: -1 },
+};
 
 const getAll = async (
   filter: Record<string, unknown>,
@@ -90,7 +129,13 @@ const getAll = async (
     ...(options.onlyAvailable ? { remainingQty: { $gt: 0 } } : {}),
   };
 
-  let cursor = StockBatchModel.find(query).skip(startIndex).limit(limit).sort({ expiryDate: 1 });
+  // FEFO picker sorts earliest-expiry-first (that's the pick order) no
+  // matter what; every other consumer defaults to latest-added-first, or
+  // its own explicit sortId if one was requested.
+  const sort: Record<string, 1 | -1> = options.onlyAvailable
+    ? { expiryDate: 1 }
+    : (options.sortId && SORT_MAP[options.sortId]) || { createdAt: -1 };
+  let cursor = StockBatchModel.find(query).skip(startIndex).limit(limit).sort(sort);
   for (const [field, select] of POPULATE) cursor = cursor.populate(field, select) as any;
   const data = await cursor.lean();
   const count = await StockBatchModel.countDocuments(query);
@@ -98,4 +143,4 @@ const getAll = async (
   return { totalCount: count, result: mapDbListToDtoList(data) };
 };
 
-export { addStockBatch, consumeBatch, releaseBatch, getAll };
+export { addStockBatch, consumeBatch, releaseBatch, updateBatchExpiryBySource, getAll };

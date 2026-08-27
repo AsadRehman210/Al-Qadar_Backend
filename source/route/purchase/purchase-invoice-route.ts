@@ -4,6 +4,7 @@ import {
   getAll,
   get,
   getPayables,
+  getRecoverableTaxReport,
   update,
   updateStatus,
   addPayment,
@@ -23,6 +24,7 @@ purchaseInvoiceRoute
   .post("/", verifyToken, canWrite, create)
   .get("/", verifyToken, canRead, getAll)
   .get("/payables", verifyToken, canRead, getPayables)
+  .get("/recoverable-tax-report", verifyToken, canRead, getRecoverableTaxReport)
   .get("/:id", verifyToken, canRead, get)
   .put("/:id", verifyToken, canWrite, update)
   .patch("/:id/status", verifyToken, canWrite, updateStatus)

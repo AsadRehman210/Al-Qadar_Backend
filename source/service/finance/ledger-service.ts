@@ -47,11 +47,17 @@ const getAll = async (
     ...buildDateFilter(options.fromDate, options.toDate),
   };
 
+  // createdAt, not date — `date` is each source module's own business date
+  // (some post the exact creation timestamp, others truncate to that day's
+  // midnight, e.g. Sale Invoice), so it's inconsistent across sources and
+  // can't be trusted to reflect real posting order. createdAt is a plain
+  // Mongoose timestamp on every line regardless of source, so "latest
+  // posted first" always matches what actually happened.
   const data = await LedgerLineModel.find(query)
     .populate("accountId", "code name type")
     .skip(startIndex)
     .limit(limit)
-    .sort({ date: -1, _id: -1 })
+    .sort({ createdAt: -1, _id: -1 })
     .lean();
   const count = await LedgerLineModel.countDocuments(query);
 

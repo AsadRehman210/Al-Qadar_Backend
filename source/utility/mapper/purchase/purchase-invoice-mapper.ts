@@ -45,6 +45,7 @@ const mapDbToDto = (dbModel: IPurchaseInvoiceModel): purchaseInvoiceDto => {
     subtotal: dbModel.subtotal ?? 0,
     taxPercent: dbModel.taxPercent ?? 0,
     taxAmount: dbModel.taxAmount ?? 0,
+    taxRecoverable: dbModel.taxRecoverable ?? true,
     total: dbModel.total ?? 0,
     status: dbModel.status || null,
     stockApplied: dbModel.stockApplied ?? false,

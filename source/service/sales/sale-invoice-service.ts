@@ -412,6 +412,44 @@ const getAll = async (
   return { totalCount: count, result };
 };
 
+// The "Collected Tax" module's own view — every Sale Invoice's output VAT
+// (tax is recognized at creation, not a later status — see create() above),
+// with the total across every matching invoice, not just the current page.
+const getCollectedTaxReport = async (
+  filter: Record<string, unknown>,
+  page: number,
+  limit: number,
+  options: { search?: string; customerId?: string; fromDate?: string; toDate?: string } = {}
+): Promise<{ totalCount: number; totalTaxAmount: number; result: saleInvoiceDto[] }> => {
+  const dateFilter: Record<string, unknown> = {};
+  if (options.fromDate) dateFilter.$gte = new Date(options.fromDate);
+  if (options.toDate) dateFilter.$lte = new Date(options.toDate);
+
+  const query = {
+    ...filter,
+    taxAmount: { $gt: 0 },
+    // A cancelled sale never happened financially (see updateDeliveryStatus,
+    // which reverses the invoice's own Revenue/AR/VAT Payable entry the
+    // moment it's cancelled) — it collected no tax, so it has no business
+    // showing up here.
+    deliveryStatus: { $ne: "Cancelled" },
+    ...buildSearchCondition(options.search, ["invoiceNumber"]),
+    ...buildExactFilters(options as Record<string, unknown>, { customerId: "customerId" }),
+    ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+  };
+
+  const startIndex = (page - 1) * limit;
+  let cursor = SaleInvoiceModel.find(query).skip(startIndex).limit(limit).sort({ date: -1 });
+  for (const [field, select] of POPULATE) cursor = cursor.populate(field, select) as any;
+  const data = await cursor.lean();
+  const count = await SaleInvoiceModel.countDocuments(query);
+
+  const allMatching = await SaleInvoiceModel.find(query).select("taxAmount").lean();
+  const totalTaxAmount = round2(allMatching.reduce((sum, i) => sum + (i.taxAmount || 0), 0));
+
+  return { totalCount: count, totalTaxAmount, result: mapDbListToDtoList(data) };
+};
+
 // The real Accounts Receivable view — every Sale Invoice actually still
 // owed on (balanceDue > 0) or owing a refund back (refundDue > 0), computed
 // fresh off the same balanceDue/refundDue this session already built for
@@ -589,6 +627,29 @@ const updateDeliveryStatus = async (
       actor
     );
     invoice.stockApplied = false;
+
+    // Reverses the exact Revenue/AR/VAT Payable entry create() posted — a
+    // cancelled sale never happened financially, so its Ledger footprint
+    // (and everything downstream: VAT summary, Collected Tax, financial
+    // reports) needs to go back to zero, not just its stock.
+    const accountsReceivable = await ensureAccountsReceivable(scope, actor);
+    const revenueAccount = await getRevenueAccount(scope);
+    const vatLines = [];
+    if (invoice.taxAmount) {
+      const vatPayable = await ensureVatPayable(scope, actor);
+      vatLines.push({ accountId: String(vatPayable._id), debit: invoice.taxAmount, credit: 0 });
+    }
+    await createJournalEntry({
+      tenant: scope,
+      createdBy: actor,
+      date: new Date(),
+      memo: `Sale Invoice ${invoice.invoiceNumber} — cancelled`,
+      lines: [
+        { accountId: String(revenueAccount._id), debit: invoice.subtotal || 0, credit: 0 },
+        ...vatLines,
+        { accountId: String(accountsReceivable._id), debit: 0, credit: invoice.total || 0 },
+      ],
+    });
   }
 
   invoice.deliveryStatus = status as any;
@@ -730,4 +791,4 @@ const deleteByID = async (id: string, filter: Record<string, unknown>, actor: st
   return { errorCode: "success", result: mapDbToDto(invoice) };
 };
 
-export { create, getAll, get, getReceivables, getRawByCustomer, update, updateDeliveryStatus, addPayment, addRefund, deleteByID };
+export { create, getAll, get, getReceivables, getCollectedTaxReport, getRawByCustomer, update, updateDeliveryStatus, addPayment, addRefund, deleteByID };

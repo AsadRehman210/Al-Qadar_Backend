@@ -100,6 +100,46 @@ const getReceivables = async (req: Request, res: Response): Promise<Response> =>
   }
 };
 
+// "Collected Tax" module — every Sale Invoice's output VAT, plus the true
+// total across every matching invoice.
+const getCollectedTaxReport = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const query = req.query as {
+      page?: string;
+      limit?: string;
+      adminId?: string;
+      merchantId?: string;
+      search?: string;
+      customerId?: string;
+      fromDate?: string;
+      toDate?: string;
+    };
+    const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
+    const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
+
+    const filter = buildScopeFilter(user, query);
+    const result = await saleInvoiceService.getCollectedTaxReport(filter, page, limit, {
+      search: query.search,
+      customerId: query.customerId,
+      fromDate: query.fromDate,
+      toDate: query.toDate,
+    });
+
+    return res.json(
+      success(Messages.MSG_DATA_FOUND, Enums.ErrorCode.success, {
+        result: result.result,
+        total_records: result.totalCount,
+        total_pages: Math.ceil(result.totalCount / limit) || 1,
+        page_number: page,
+        totalTaxAmount: result.totalTaxAmount,
+      })
+    );
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
 const get = async (req: Request, res: Response): Promise<Response> => {
   try {
     const user = req.user as RequestUser;
@@ -214,4 +254,4 @@ const deleteByID = async (req: Request, res: Response): Promise<Response> => {
   }
 };
 
-export { create, getAll, get, getReceivables, update, updateDeliveryStatus, addPayment, addRefund, deleteByID };
+export { create, getAll, get, getReceivables, getCollectedTaxReport, update, updateDeliveryStatus, addPayment, addRefund, deleteByID };

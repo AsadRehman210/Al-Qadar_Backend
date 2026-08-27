@@ -37,8 +37,8 @@ const ledgerLineSchema: Schema<ILedgerLineModel> = new Schema(
   }
 );
 
-// Serves ledger-service.ts's getAll list (tenant-scoped, optionally accountId-filtered, sorted date:-1,_id:-1).
-ledgerLineSchema.index({ adminId: 1, merchantId: 1, date: -1, _id: -1 });
+// Serves ledger-service.ts's getAll list (tenant-scoped, optionally accountId-filtered, sorted createdAt:-1,_id:-1).
+ledgerLineSchema.index({ adminId: 1, merchantId: 1, createdAt: -1, _id: -1 });
 // Serves ledger-service.ts's getByAccount (tenant + accountId, sorted date:1,_id:1 for running-balance walk).
 ledgerLineSchema.index({ adminId: 1, merchantId: 1, accountId: 1, date: 1, _id: 1 });
 

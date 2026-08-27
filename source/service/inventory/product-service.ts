@@ -67,7 +67,7 @@ const getAll = async (
     .populate(POPULATE_FIELD, POPULATE_SELECT)
     .skip(startIndex)
     .limit(limit)
-    .sort({ productName: 1 })
+    .sort({ _id: -1 })
     .lean();
   const count = await ProductModel.countDocuments(query);
 
