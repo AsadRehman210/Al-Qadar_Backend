@@ -29,6 +29,7 @@ const mapDbToDto = (
     costPrice: dbModel.costPrice ?? 0,
     salePrice: dbModel.salePrice ?? 0,
     unit: dbModel.unit || "pcs",
+    lowStockQty: dbModel.lowStockQty ?? 0,
     totalStock,
     availableQty,
     adminId: dbModel.adminId ? String(dbModel.adminId) : null,

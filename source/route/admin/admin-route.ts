@@ -8,6 +8,7 @@ import {
   activate,
   deactivate,
   unlock,
+  unlockOpeningStock,
   addPayment,
   getPayments,
 } from "../../controller/admin/admin-controller";
@@ -27,6 +28,7 @@ adminRoute.put("/:id", verifyToken, requireRole(AccountRole.super_admin), update
 adminRoute.patch("/:id/activate", verifyToken, requireRole(AccountRole.super_admin), activate);
 adminRoute.patch("/:id/deactivate", verifyToken, requireRole(AccountRole.super_admin), deactivate);
 adminRoute.patch("/:id/unlock", verifyToken, requireRole(AccountRole.super_admin), unlock);
+adminRoute.patch("/:id/unlock-opening-stock", verifyToken, requireRole(AccountRole.super_admin), unlockOpeningStock);
 adminRoute.post("/:id/payment", verifyToken, requireRole(AccountRole.super_admin), addPayment);
 adminRoute.get("/:id/payment", verifyToken, requireRole(AccountRole.super_admin), getPayments);
 

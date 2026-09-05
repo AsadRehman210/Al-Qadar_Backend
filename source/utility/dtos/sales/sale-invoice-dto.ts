@@ -34,10 +34,17 @@ export interface saleReturnedItemDto {
   productName: string | null;
   qty: number;
   price: number;
+  unit?: string | null;
   // Snapshotted from the credit note's own line — needed to work out the
   // profit impact of a return (qty * (price - costPrice)) without the
   // frontend having to re-derive it from the original invoice line.
   costPrice: number;
+  taxPercent?: number | null;
+  taxAmount?: number | null;
+  // qty * price, before tax.
+  subtotal?: number | null;
+  // qty * price + taxAmount.
+  lineTotal?: number | null;
 }
 
 export interface saleInvoiceDto {
@@ -45,6 +52,7 @@ export interface saleInvoiceDto {
   invoiceNumber?: string | null;
   customerId?: string | null;
   customerName?: string | null;
+  // Invoice day — always derived from createdAt; there is no separate date field.
   date?: string | null;
   warehouseId?: string | null;
   warehouseName?: string | null;

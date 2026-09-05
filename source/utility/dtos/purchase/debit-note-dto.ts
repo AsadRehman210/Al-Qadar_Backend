@@ -11,6 +11,8 @@ export interface debitNoteLineDto {
   taxPercent?: number | null;
   taxAmount?: number | null;
   unitCost?: number | null;
+  billedQty?: number | null;
+  alreadyDebitedQty?: number | null;
 }
 
 export interface debitNoteDto {

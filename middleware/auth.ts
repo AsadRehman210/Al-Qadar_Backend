@@ -3,6 +3,7 @@ import { error } from '../source/utility/helper/common';
 import * as messages from '../source/utility/helper/constants/message';
 import * as Enums from '../source/utility/helper/constants/enum';
 import { AccountModel } from '../source/model/account/account-model';
+import { userModel } from '../source/model/user/user-model';
 import { syncExpiredStatus } from '../source/utility/helper/payment-expiry';
 
 const config = process.env as any;
@@ -41,6 +42,21 @@ const verifyToken = async (req: any, res: any, next: any): Promise<void> => {
         if (account.status !== Enums.AccountStatus.active) {
             res.json(error(messages.Messages.MSG_USER_DEACTIVATED, Enums.ErrorCode.de_active));
             return;
+        }
+
+        // Sub-user session: re-load the user + their Role on every request so
+        // deactivating the user, or editing their Role's permissions, takes
+        // effect immediately (same philosophy as the Account check above).
+        if (decoded.isSubUser && decoded.sub) {
+            const subUser = await userModel
+                .findOne({ _id: decoded.sub, action_type: { $ne: Enums.ActivityFlag.delete } })
+                .populate({ path: 'roleId', select: 'permissions status' });
+            if (!subUser || subUser.status !== 'active') {
+                res.json(error(messages.Messages.MSG_USER_DEACTIVATED, Enums.ErrorCode.de_active));
+                return;
+            }
+            const role = subUser.roleId as any;
+            decoded.permissions = Array.isArray(role?.permissions) ? role.permissions : [];
         }
     } catch (err: any) {
         res.json(error(messages.Messages.MSG_DB_CONNECTION_ERROR, Enums.ErrorCode.exception, err.message));

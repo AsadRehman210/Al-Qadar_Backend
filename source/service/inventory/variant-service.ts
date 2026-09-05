@@ -27,6 +27,7 @@ interface CreateVariantInput {
   costPrice?: number;
   salePrice?: number;
   unit?: string;
+  lowStockQty?: number;
 }
 
 interface VariantResult {
@@ -56,6 +57,7 @@ const create = async (
     costPrice: Number(data.costPrice) || 0,
     salePrice: Number(data.salePrice) || 0,
     unit: data.unit || "pcs",
+    lowStockQty: Math.max(0, Number(data.lowStockQty) || 0),
     adminId: scope.adminId,
     merchantId: scope.merchantId,
     createdBy,
@@ -158,6 +160,7 @@ const update = async (
   if (data.costPrice !== undefined) updatePayload.costPrice = Number(data.costPrice) || 0;
   if (data.salePrice !== undefined) updatePayload.salePrice = Number(data.salePrice) || 0;
   if (data.unit !== undefined) updatePayload.unit = data.unit || "pcs";
+  if (data.lowStockQty !== undefined) updatePayload.lowStockQty = Math.max(0, Number(data.lowStockQty) || 0);
 
   const updated = await VariantModel.findOneAndUpdate(
     { _id: id, ...filter },
@@ -195,6 +198,32 @@ const updateCostWeightedAverage = async (
   return rounded;
 };
 
+// Inverse of updateCostWeightedAverage — pull this batch's qty/cost back
+// out of the running average. Called by Production reverse while the
+// finished goods are still on hand (so existingQty still includes them).
+const reverseCostWeightedAverage = async (
+  variantId: string,
+  existingQty: number,
+  removedQty: number,
+  removedBatchUnitCost: number
+): Promise<number> => {
+  const variant = await VariantModel.findById(variantId);
+  if (!variant) return 0;
+
+  const currentQty = Math.max(0, Number(existingQty) || 0);
+  const take = Math.max(0, Number(removedQty) || 0);
+  const remainingQty = currentQty - take;
+  const currentCost = Number(variant.costPrice) || 0;
+  const batchCost = Number(removedBatchUnitCost) || 0;
+  const next =
+    remainingQty > 0 ? (currentQty * currentCost - take * batchCost) / remainingQty : 0;
+  const rounded = Math.round(Math.max(0, next) * 100) / 100;
+
+  variant.costPrice = rounded;
+  await variant.save();
+  return rounded;
+};
+
 const deleteByID = async (id: string, filter: Record<string, unknown>): Promise<VariantResult> => {
   const deleted = await VariantModel.findOne({ _id: id, ...filter }).lean();
   if (!deleted) {
@@ -204,4 +233,4 @@ const deleteByID = async (id: string, filter: Record<string, unknown>): Promise<
   return { errorCode: "success", result: mapDbToDto(deleted) };
 };
 
-export { create, getAll, get, getByIds, update, updateCostWeightedAverage, deleteByID };
+export { create, getAll, get, getByIds, update, updateCostWeightedAverage, reverseCostWeightedAverage, deleteByID };

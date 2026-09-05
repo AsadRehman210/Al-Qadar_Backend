@@ -11,6 +11,10 @@ export interface IVariantModel extends Document {
   // Purchase/Sale line rows can display it instead of asking for it
   // (and risking inconsistent spellings) on every single transaction.
   unit?: string | null;
+  // On-hand qty below this flags the SKU as Low stock on the Stock list
+  // filter. 0 = disabled (only In stock / Out of stock). Not a reorder
+  // trigger — purchasing stays manual.
+  lowStockQty?: number | null;
   adminId?: mongoose.Types.ObjectId | null;
   merchantId?: mongoose.Types.ObjectId | null;
   createdBy?: mongoose.Types.ObjectId | null;
@@ -31,6 +35,7 @@ const variantSchema: Schema<IVariantModel> = new Schema(
     costPrice: { type: Number, default: 0 },
     salePrice: { type: Number, default: 0 },
     unit: { type: String, default: "pcs" },
+    lowStockQty: { type: Number, default: 0 },
     adminId: { type: Schema.Types.ObjectId, ref: "Account", default: null },
     merchantId: { type: Schema.Types.ObjectId, ref: "Account", default: null },
     createdBy: { type: Schema.Types.ObjectId, ref: "Account", default: null },

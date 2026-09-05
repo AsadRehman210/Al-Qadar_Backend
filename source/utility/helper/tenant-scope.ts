@@ -13,6 +13,13 @@ export interface RequestUser {
   id: string;
   role: AccountRole;
   adminId?: string | null;
+  // Present only for a sub-user session (see auth-service.ts login + the
+  // middleware/auth.ts live check). `id`/`role`/`adminId` still describe the
+  // PARENT tenant, so every scope helper below keeps working unchanged — a
+  // sub-user always operates inside its parent tenant's data boundary.
+  isSubUser?: boolean;
+  sub?: string | null;
+  permissions?: string[];
 }
 
 interface ScopeBody {
@@ -99,4 +106,21 @@ const toAggregateFilter = (filter: Record<string, unknown>): Record<string, unkn
   return result;
 };
 
-export { resolveTenantScope, buildScopeFilter, toAggregateFilter };
+/**
+ * LIST/READ filter for own-tenant-only collections (Users, Roles). Unlike
+ * buildScopeFilter(), a super_admin here is narrowed to its OWN records
+ * (`adminId: null, merchantId: null`) rather than the platform-wide
+ * "see everything" view — one tenant must never see another tenant's
+ * users or roles.
+ */
+const buildOwnerScopeFilter = (user: RequestUser): Record<string, unknown> => {
+  if (user.role === AccountRole.merchant) {
+    return { merchantId: user.id };
+  }
+  if (user.role === AccountRole.admin) {
+    return { adminId: user.id, merchantId: null };
+  }
+  return { adminId: null, merchantId: null };
+};
+
+export { resolveTenantScope, buildScopeFilter, buildOwnerScopeFilter, toAggregateFilter };

@@ -35,6 +35,9 @@ export interface purchaseReturnedItemDto {
   productName: string | null;
   qty: number;
   price: number;
+  taxPercent?: number | null;
+  taxAmount?: number | null;
+  lineTotal?: number | null;
 }
 
 export interface purchaseInvoiceDto {
@@ -80,6 +83,9 @@ export interface purchaseInvoiceDto {
   // Receivable posted). Set once at creation, locked once Received — see
   // updateStatus in purchase-invoice-service.ts for the posting split.
   taxRecoverable?: boolean | null;
+  // Applied debit-note tax reversed off this invoice — only set on the
+  // Recoverable Tax report so the row can show original vs net input VAT.
+  returnedTaxAmount?: number | null;
   notes?: string | null;
   currency?: string | null;
   createdAt?: Date | null;

@@ -1,10 +1,20 @@
 export interface userDto {
     id: string;
     user_name?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
     email?: string | null
     phone?: string | null;
     // password is deliberately absent — it must never be returned to a client.
     cnic?: string | null;
+    roleId?: string | null;
+    roleName?: string | null;
+    permissions?: string[];
+    status?: string | null;
+    is_default_user?: boolean | null;
+    createdBy?: string | null;
+    adminId?: string | null;
+    merchantId?: string | null;
     code?: string | null;
     code_generation_time?: Date | null;
     is_verified?: number | null;
@@ -12,7 +22,8 @@ export interface userDto {
     last_email_sent_at?: Date | null;
     failed_attempts?: number | null;
     lock_until?: Date | null;
+    isLocked?: boolean;
     createdAt?: Date | null;
     updatedAt?: Date | null;
     action_type?: number | null;
-  } 
+  }

@@ -24,11 +24,17 @@ export interface StockRow {
 /**
  * The one function that ever mutates StockLevel. Every stock-moving action
  * in the system — Production complete, Sale delivery, Purchase receive,
- * Credit/Debit Note reversal, Stock Transfer approve, Stock Issue create,
- * manual Adjustment — funnels through here. Also writes one StockAdjustment
- * audit row per call, so "why does this warehouse hold this much" is always
- * traceable via `reason`.
+ * Credit/Debit Note reversal, Stock Transfer approve, Stock Issue create —
+ * funnels through here. Also writes one StockAdjustment audit row per call,
+ * so "why does this warehouse hold this much" is always traceable via `reason`.
  */
+const toOid = (id: string | null | undefined): mongoose.Types.ObjectId | null => {
+  if (!id) return null;
+  if (!mongoose.Types.ObjectId.isValid(id)) return null;
+  const oid = new mongoose.Types.ObjectId(id);
+  return String(oid) === String(id) ? oid : null;
+};
+
 const adjustStock = async (
   scope: TenantScope,
   variantId: string,
@@ -39,12 +45,21 @@ const adjustStock = async (
   actor: string | null
 ): Promise<number> => {
   const amount = Math.max(0, Number(qty) || 0);
+  const adminId = toOid(scope.adminId);
+  const merchantId = toOid(scope.merchantId);
+  const warehouseOid = toOid(warehouseId);
+  const variantOid = toOid(variantId);
+  if (!warehouseOid || !variantOid) {
+    throw new Error("adjustStock requires a valid warehouseId and variantId");
+  }
 
+  // Query with ObjectIds — string vs ObjectId mismatch was creating a
+  // second StockLevel (qty 0) while the list view kept reading the original.
   let level = await StockLevelModel.findOne({
-    adminId: scope.adminId,
-    merchantId: scope.merchantId,
-    warehouseId,
-    variantId,
+    adminId,
+    merchantId,
+    warehouseId: warehouseOid,
+    variantId: variantOid,
   });
 
   const before = level?.qty || 0;
@@ -58,26 +73,26 @@ const adjustStock = async (
     await level.save();
   } else {
     level = await StockLevelModel.create({
-      warehouseId,
-      variantId,
+      warehouseId: warehouseOid,
+      variantId: variantOid,
       qty: after,
       minQty: 0,
-      adminId: scope.adminId,
-      merchantId: scope.merchantId,
+      adminId,
+      merchantId,
     });
   }
 
   await StockAdjustmentModel.create({
-    warehouseId,
-    variantId,
+    warehouseId: warehouseOid,
+    variantId: variantOid,
     type,
     qty: amount,
     reason,
     balanceBefore: before,
     balanceAfter: after,
     adjustedBy: actor,
-    adminId: scope.adminId,
-    merchantId: scope.merchantId,
+    adminId,
+    merchantId,
   });
 
   return after;
@@ -166,9 +181,9 @@ export interface StockViewOptions {
   limit?: number;
 }
 
-const computeStockStatus = (totalQty: number, minQty: number): StockStatus => {
+const computeStockStatus = (totalQty: number, lowStockQty: number): StockStatus => {
   if (totalQty <= 0) return "out_of_stock";
-  if (totalQty <= minQty) return "low_stock";
+  if (lowStockQty > 0 && totalQty < lowStockQty) return "low_stock";
   return "in_stock";
 };
 
@@ -232,7 +247,7 @@ const getStockView = async (
     const variantLevels = levels.filter((l) => String(l.variantId) === String(v._id));
     const product = v.productId as any;
     const totalQty = variantLevels.reduce((sum, l) => sum + (l.qty || 0), 0);
-    const minQty = Math.max(0, ...variantLevels.map((l) => l.minQty || 0), 0);
+    const minQty = Math.max(0, Number((v as { lowStockQty?: number }).lowStockQty) || 0);
     return {
       variantId: String(v._id),
       variantName: v.variantName || null,
@@ -251,7 +266,7 @@ const getStockView = async (
           warehouseId: isPopulated ? String(wh._id) : String(wh),
           warehouseName: isPopulated ? wh.name || null : null,
           qty: l.qty || 0,
-          minQty: l.minQty || 0,
+          minQty,
         };
       }),
     };
@@ -273,28 +288,26 @@ const getStockSummary = async (
   filter: Record<string, unknown>
 ): Promise<{ totalSkus: number; totalUnits: number; lowStockCount: number; outOfStockCount: number }> => {
   const matchScope = toAggregateFilter(filter);
-  const variants = await VariantModel.find(matchScope).select("_id").lean();
+  const variants = await VariantModel.find(matchScope).select("_id lowStockQty").lean();
   if (!variants.length) {
     return { totalSkus: 0, totalUnits: 0, lowStockCount: 0, outOfStockCount: 0 };
   }
 
   const levels = await StockLevelModel.find({ ...matchScope, variantId: { $in: variants.map((v) => v._id) } }).lean();
-  const byVariant = new Map<string, { qty: number; minQty: number }>();
+  const qtyByVariant = new Map<string, number>();
   for (const l of levels) {
     const key = String(l.variantId);
-    const entry = byVariant.get(key) || { qty: 0, minQty: 0 };
-    entry.qty += l.qty || 0;
-    entry.minQty = Math.max(entry.minQty, l.minQty || 0);
-    byVariant.set(key, entry);
+    qtyByVariant.set(key, (qtyByVariant.get(key) || 0) + (l.qty || 0));
   }
 
   let totalUnits = 0;
   let lowStockCount = 0;
   let outOfStockCount = 0;
   for (const v of variants) {
-    const entry = byVariant.get(String(v._id)) || { qty: 0, minQty: 0 };
-    totalUnits += entry.qty;
-    const status = computeStockStatus(entry.qty, entry.minQty);
+    const qty = qtyByVariant.get(String(v._id)) || 0;
+    const minQty = Math.max(0, Number(v.lowStockQty) || 0);
+    totalUnits += qty;
+    const status = computeStockStatus(qty, minQty);
     if (status === "low_stock") lowStockCount++;
     if (status === "out_of_stock") outOfStockCount++;
   }

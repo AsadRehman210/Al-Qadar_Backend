@@ -1,139 +1,212 @@
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
+import bcrypt from "bcrypt";
 import { ActivityFlag } from "../../utility/helper/constants/enum";
 import { userModel } from "../../model/user/user-model";
+import { roleModel } from "../../model/role/role-model";
+import { AccountModel } from "../../model/account/account-model";
 import { userDto } from "../../utility/dtos/user/user-dto";
-import { boolRM } from "../../utility/response_model/bool-rm";
 import { mapDbToDto, mapDbListToDtoList } from "../../utility/mapper/user/user-mapper";
-import * as Enums from "../../utility/helper/constants/enum";
 import { TenantScope } from "../../utility/helper/tenant-scope";
-import moment from 'moment';
-// import {
-//   get,
-// } from "../../apis/subscriber/subscriber"
+import { BCRYPT_SALT_ROUNDS } from "../../utility/helper/constants/security";
 
-const post = async (model: any, scope: TenantScope): Promise<{ result: userDto | null; errorCode: number }> => {
-  let data;
-  let errorCode: number = Number.MIN_SAFE_INTEGER;
+const NOT_DELETED = { action_type: { $ne: ActivityFlag.delete } };
+const ROLE_POPULATE = { path: "roleId", select: "role_name permissions status" };
 
-  // If no ID or ID is 0, create a new user
-  if (model.id == 0 || model.id === undefined) {
-    if (model.email) {
-      const existing = await userModel.findOne({
-        email: model.email,
-        adminId: scope.adminId,
-        merchantId: scope.merchantId,
-        action_type: { $ne: Enums.ActivityFlag.delete },
-      }).select("_id").lean();
-      if (existing) {
-        return { result: null, errorCode: Enums.ErrorCode.duplicate_entry };
-      }
-    }
+interface UserInput {
+  first_name?: string;
+  last_name?: string;
+  user_name?: string;
+  email?: string;
+  phone?: string;
+  cnic?: string;
+  password?: string;
+  roleId?: string;
+  status?: "active" | "inactive";
+}
 
-    // Create a new ObjectId for the user
-    model._id = new mongoose.Types.ObjectId();
-    model.action_type = ActivityFlag.add;
-    model.adminId = scope.adminId;
-    model.merchantId = scope.merchantId;
-    // Generate a code and set generation time
-    model.code_generation_time = moment().format("YYYY MM DD HH:mm:ss");
-    model.is_verified = Enums.ErrorCode.not_verified;
+interface UserResult {
+  errorCode: "success" | "updated" | "duplicate_entry" | "not_found" | "invalid" | "invalid_role";
+  result: userDto | null;
+}
 
-    // Save the new user to the database
-    data = await userModel.create(model);
-    errorCode = Enums.ErrorCode.success;
-  } else if (model.id) {
-    if (model.email) {
-      const existing = await userModel.findOne({
-        email: model.email,
-        adminId: scope.adminId,
-        merchantId: scope.merchantId,
-        _id: { $ne: model.id },
-        action_type: { $ne: Enums.ActivityFlag.delete },
-      }).select("_id").lean();
-      if (existing) {
-        return { result: null, errorCode: Enums.ErrorCode.duplicate_entry };
-      }
-    }
+const normalizeEmail = (email?: string) => (email || "").toLowerCase().trim();
 
-    // Update existing user — scoped so one tenant can never edit another
-    // tenant's record even if it guesses/leaks an _id.
-    model.action_type = ActivityFlag.edit;
-    delete model.adminId;
-    delete model.merchantId;
-    data = await userModel.findOneAndUpdate(
-      { _id: model.id, adminId: scope.adminId, merchantId: scope.merchantId },
-      model,
-      { new: true }
-    ).lean();
-    errorCode = Enums.ErrorCode.updated;
+// An email is unusable for a User if it belongs to ANY Account (owner login)
+// or to any other non-deleted User — login resolves an email to exactly one
+// principal, so global uniqueness is required, not per-tenant.
+const emailTaken = async (email: string, exceptUserId?: string): Promise<boolean> => {
+  const accountClash = await AccountModel.findOne({ email }).select("_id").lean();
+  if (accountClash) return true;
+  const userClash = await userModel
+    .findOne({
+      email,
+      ...NOT_DELETED,
+      ...(exceptUserId ? { _id: { $ne: exceptUserId } } : {}),
+    })
+    .select("_id")
+    .lean();
+  return Boolean(userClash);
+};
+
+// The Role must exist, be active, and belong to the same tenant as the user.
+const roleIsUsable = async (roleId: string, scope: Record<string, unknown>): Promise<boolean> => {
+  if (!mongoose.isValidObjectId(roleId)) return false;
+  const role = await roleModel
+    .findOne({ _id: roleId, ...scope, ...NOT_DELETED, status: "active" })
+    .select("_id")
+    .lean();
+  return Boolean(role);
+};
+
+const create = async (data: UserInput, scope: TenantScope, createdBy: string): Promise<UserResult> => {
+  const email = normalizeEmail(data.email);
+  if (!email || !data.password || !data.first_name) {
+    return { errorCode: "invalid", result: null };
+  }
+  if (await emailTaken(email)) {
+    return { errorCode: "duplicate_entry", result: null };
   }
 
-  // Return the result and error code
-  if (data) {
-    return { result: mapDbToDto(data), errorCode: errorCode };
-  } else {
-    return { result: null, errorCode: Enums.ErrorCode.failed };
+  const tenantFilter = { adminId: scope.adminId, merchantId: scope.merchantId };
+  if (!data.roleId || !(await roleIsUsable(data.roleId, tenantFilter))) {
+    return { errorCode: "invalid_role", result: null };
   }
+
+  const created = await userModel.create({
+    _id: new mongoose.Types.ObjectId(),
+    first_name: data.first_name,
+    last_name: data.last_name || null,
+    user_name: data.user_name || `${data.first_name} ${data.last_name || ""}`.trim(),
+    email,
+    phone: data.phone || null,
+    cnic: data.cnic || null,
+    password: await bcrypt.hash(data.password, BCRYPT_SALT_ROUNDS),
+    roleId: data.roleId,
+    status: data.status || "active",
+    is_default_user: false,
+    is_verified: 1,
+    action_type: ActivityFlag.add,
+    adminId: scope.adminId,
+    merchantId: scope.merchantId,
+    createdBy,
+  });
+
+  const populated = await userModel.findById(created._id).populate(ROLE_POPULATE).lean();
+  return { errorCode: "success", result: mapDbToDto(populated as any) };
 };
 
 const getAll = async (
   filter: Record<string, unknown>,
   page: number,
-  limit: number
-): Promise<{ totalCount: number; result: userDto[] | null }> => {
+  limit: number,
+  options: { search?: string; status?: string; excludeId?: string | null } = {}
+): Promise<{ totalCount: number; result: userDto[] }> => {
   const startIndex = (page - 1) * limit;
-  const query = { ...filter, action_type: { $ne: Enums.ActivityFlag.delete } };
+  const query: Record<string, unknown> = { ...filter, ...NOT_DELETED };
+  if (options.search) {
+    const rx = new RegExp(options.search.trim(), "i");
+    query.$or = [{ first_name: rx }, { last_name: rx }, { user_name: rx }, { email: rx }, { phone: rx }];
+  }
+  if (options.status === "active" || options.status === "inactive") {
+    query.status = options.status;
+  }
+  if (options.excludeId && mongoose.isValidObjectId(options.excludeId)) {
+    query._id = { $ne: new mongoose.Types.ObjectId(options.excludeId) };
+  }
 
-  // Fetch paginated user data
-  const data = await userModel.find(query).skip(startIndex).limit(limit).sort({ _id: -1 }).lean();
-
-  // Count total number of users excluding deleted
+  const data = await userModel
+    .find(query)
+    .populate(ROLE_POPULATE)
+    .skip(startIndex)
+    .limit(limit)
+    .sort({ _id: -1 })
+    .lean();
   const count = await userModel.countDocuments(query);
 
-  return {
-    totalCount: count,
-    result: mapDbListToDtoList(data),
-  };
+  return { totalCount: count, result: mapDbListToDtoList(data as any) };
 };
 
 const get = async (id: string, filter: Record<string, unknown>): Promise<userDto | null> => {
-  // Fetch user by ID, excluding deleted ones, scoped to the caller's tenant
-  const data = await userModel.findOne({ _id: id, ...filter, action_type: { $ne: Enums.ActivityFlag.delete } }).lean();
-
-  if (data) {
-    return mapDbToDto(data);
-  } else {
-    return null;
-  }
+  if (!mongoose.isValidObjectId(id)) return null;
+  const data = await userModel
+    .findOne({ _id: id, ...filter, ...NOT_DELETED })
+    .populate(ROLE_POPULATE)
+    .lean();
+  return data ? mapDbToDto(data as any) : null;
 };
 
-const deleteByID = async (id: string, filter: Record<string, unknown>): Promise<boolRM | null> => {
-  // Mark user as deleted, scoped to the caller's tenant
-  const data = await userModel.findOneAndUpdate(
-    { _id: id, ...filter, action_type: { $ne: Enums.ActivityFlag.delete } },
-    { $set: { action_type: ActivityFlag.delete } },
-    {
-      new: true,
-      select: 'action_type',
+const update = async (
+  id: string,
+  data: UserInput,
+  filter: Record<string, unknown>
+): Promise<UserResult> => {
+  if (!mongoose.isValidObjectId(id)) return { errorCode: "not_found", result: null };
+
+  const current = await userModel.findOne({ _id: id, ...filter, ...NOT_DELETED }).lean();
+  if (!current) return { errorCode: "not_found", result: null };
+
+  const payload: Record<string, unknown> = { action_type: ActivityFlag.edit };
+
+  if (data.email !== undefined) {
+    const email = normalizeEmail(data.email);
+    if (!email) return { errorCode: "invalid", result: null };
+    if (email !== current.email && (await emailTaken(email, id))) {
+      return { errorCode: "duplicate_entry", result: null };
     }
-  ).lean();
-
-  let result: boolRM = {
-    trueOrFalse: false
-  };
-
-  // If the update was successful, set result to true
-  if (data) {
-    result.trueOrFalse = true;
+    payload.email = email;
   }
-  return result;
+  if (data.first_name !== undefined) payload.first_name = data.first_name;
+  if (data.last_name !== undefined) payload.last_name = data.last_name || null;
+  if (data.phone !== undefined) payload.phone = data.phone || null;
+  if (data.cnic !== undefined) payload.cnic = data.cnic || null;
+  if (data.status !== undefined) payload.status = data.status;
+  if (data.password) payload.password = await bcrypt.hash(data.password, BCRYPT_SALT_ROUNDS);
+
+  if (data.roleId !== undefined) {
+    if (!(await roleIsUsable(data.roleId, filter))) {
+      return { errorCode: "invalid_role", result: null };
+    }
+    payload.roleId = data.roleId;
+  }
+
+  const updated = await userModel
+    .findOneAndUpdate({ _id: id, ...filter, ...NOT_DELETED }, { $set: payload }, { new: true })
+    .populate(ROLE_POPULATE)
+    .lean();
+  if (!updated) return { errorCode: "not_found", result: null };
+
+  return { errorCode: "updated", result: mapDbToDto(updated as any) };
 };
 
-
-
-export {
-  post,
-  getAll,
-  get,
-  deleteByID
+const setStatus = async (
+  id: string,
+  filter: Record<string, unknown>,
+  status: "active" | "inactive"
+): Promise<UserResult> => {
+  if (!mongoose.isValidObjectId(id)) return { errorCode: "not_found", result: null };
+  const updated = await userModel
+    .findOneAndUpdate(
+      { _id: id, ...filter, ...NOT_DELETED },
+      { $set: { status, action_type: ActivityFlag.edit, ...(status === "active" ? { lock_until: null, failed_attempts: 0 } : {}) } },
+      { new: true }
+    )
+    .populate(ROLE_POPULATE)
+    .lean();
+  if (!updated) return { errorCode: "not_found", result: null };
+  return { errorCode: "updated", result: mapDbToDto(updated as any) };
 };
+
+const deleteByID = async (
+  id: string,
+  filter: Record<string, unknown>
+): Promise<{ errorCode: "success" | "not_found" }> => {
+  if (!mongoose.isValidObjectId(id)) return { errorCode: "not_found" };
+  const deleted = await userModel.findOneAndUpdate(
+    { _id: id, ...filter, ...NOT_DELETED },
+    { $set: { action_type: ActivityFlag.delete } },
+    { new: true, select: "_id" }
+  ).lean();
+  return { errorCode: deleted ? "success" : "not_found" };
+};
+
+export { create, getAll, get, update, setStatus, deleteByID };

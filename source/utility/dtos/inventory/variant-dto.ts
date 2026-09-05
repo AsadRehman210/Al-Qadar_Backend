@@ -9,6 +9,7 @@ export interface variantDto {
   costPrice?: number | null;
   salePrice?: number | null;
   unit?: string | null;
+  lowStockQty?: number | null;
   totalStock?: number | null;
   // Only populated when the request filtered by a specific warehouseId
   // (e.g. Sale Invoice's variant picker) — this warehouse's own qty, not

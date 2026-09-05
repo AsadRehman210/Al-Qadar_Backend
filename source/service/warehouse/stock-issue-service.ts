@@ -11,17 +11,16 @@ import { consumeBatch } from "../inventory/stock-batch-service";
 import { toDateOnly } from "../../utility/helper/date-only";
 import { createJournalEntry } from "../finance/journal-service";
 import {
-  ensureCostOfGoodsSold,
+  ensureInventory,
   ensureInventoryLossExpense,
   ensureInternalUseExpense,
   ensureSamplesExpense,
   ensureOtherOperatingExpense,
 } from "../../utility/helper/finance-accounts";
 
-// Every issueType reclassifies value already recognized as COGS (this app
-// expenses COGS at Purchase-received time, not at point-of-sale) into its
-// own expense line — net-zero P&L impact, but now visible as its own
-// category instead of invisibly blended into COGS.
+// Every issueType writes inventory off the balance sheet into its own
+// expense line — goods left the warehouse without a sale, so Inventory
+// is credited and a typed expense is debited.
 const ISSUE_TYPE_EXPENSE_ACCOUNT: Record<string, typeof ensureInventoryLossExpense> = {
   Damage: ensureInventoryLossExpense,
   "Internal Use": ensureInternalUseExpense,
@@ -159,7 +158,7 @@ const create = async (
   if (issuedValue > 0) {
     const ensureExpenseAccount = ISSUE_TYPE_EXPENSE_ACCOUNT[data.issueType || "Internal Use"] || ensureOtherOperatingExpense;
     const expenseAccount = await ensureExpenseAccount(scope, createdBy);
-    const cogsAccount = await ensureCostOfGoodsSold(scope, createdBy);
+    const inventoryAccount = await ensureInventory(scope, createdBy);
     await createJournalEntry({
       tenant: scope,
       createdBy,
@@ -167,7 +166,7 @@ const create = async (
       memo: `Stock Issue ${issueNo} — ${data.issueType || "Internal Use"}`,
       lines: [
         { accountId: String(expenseAccount._id), debit: issuedValue, credit: 0 },
-        { accountId: String(cogsAccount._id), debit: 0, credit: issuedValue },
+        { accountId: String(inventoryAccount._id), debit: 0, credit: issuedValue },
       ],
     });
   }

@@ -7,8 +7,9 @@ import { mapDbToDto, mapDbListToDtoList } from "../../utility/mapper/sales/credi
 import { buildSearchCondition, buildExactFilters } from "../../utility/helper/list-query";
 import { adjustStock } from "../warehouse/stock-level-service";
 import { releaseBatch } from "../inventory/stock-batch-service";
+import { addLots } from "../inventory/quarantine-lot-service";
 import { createJournalEntry } from "../finance/journal-service";
-import { ensureAccountsReceivable, ensureVatPayable } from "../../utility/helper/finance-accounts";
+import { ensureAccountsReceivable, ensureVatPayable, ensureInventory, ensureCostOfGoodsSold } from "../../utility/helper/finance-accounts";
 import { toDateOnly, formatDateOnly } from "../../utility/helper/date-only";
 
 const POPULATE: [string, string][] = [
@@ -94,10 +95,11 @@ interface CreditNoteResult {
 }
 
 // Reasons where the returned goods are actually fit to go back on the shelf.
-// "Overcharge" never restocks (no physical item moves — it's a pure billing
-// adjustment); Damaged/Quality issue/Expired/Other never restock either
+// "Wrong entry" never restocks (no physical item moves — it's a pure billing
+// correction); Damaged/Quality issue/Expired/Other never restock either
 // (the item is back in the warehouse's possession but not resalable).
 const RESTOCK_REASONS = new Set(["Customer return", "Wrong item delivered"]);
+const QUARANTINE_REASONS = new Set(["Damaged goods", "Expired", "Other", "Quality issue"]);
 
 // Shared by create()'s validation and getReturnableLines() so both always
 // agree on exactly how much of a given invoice line is still creditable —
@@ -353,12 +355,18 @@ const updateStatus = async (
   };
 
   if (status === "Applied" && !cn.stockApplied) {
-    // Only a return in resalable condition actually goes back on the shelf.
-    // Damaged/expired/quality-issue returns are physically received but
-    // written off, and an Overcharge credit note never had a physical item
-    // move in the first place — either way, stock is left untouched while
-    // the financial reversal below still applies unconditionally.
-    if (RESTOCK_REASONS.has(cn.reason || "")) {
+    // Only a return in resalable condition actually goes back on the shelf,
+    // and only if the original sale had already shipped (stockApplied).
+    // Restocking a Pending/InTransit invoice would invent qty that never
+    // left. Damaged/Expired/Other go to not-for-sale (quarantine) instead
+    // of Available. Wrong entry is billing-only — no physical hold.
+    const original = cn.originalInvoiceId
+      ? await SaleInvoiceModel.findById(cn.originalInvoiceId).select("stockApplied").lean()
+      : null;
+    const shipped = Boolean(original?.stockApplied);
+    const shouldRestock = RESTOCK_REASONS.has(cn.reason || "") && shipped;
+    const shouldQuarantine = QUARANTINE_REASONS.has(cn.reason || "") && shipped;
+    if (shouldRestock) {
       for (const line of cn.products || []) {
         await adjustStock(
           scope,
@@ -377,6 +385,28 @@ const updateStatus = async (
           await releaseBatch(String(line.batchId), line.qty);
         }
       }
+    } else if (shouldQuarantine && cn.warehouseId) {
+      await addLots(
+        (cn.products || []).map((line) => ({
+          variantId: String(line.variantId),
+          qty: line.qty,
+          productName: line.productName || undefined,
+          costPrice: line.costPrice || 0,
+          unit: line.unit || undefined,
+          expiryDate: line.expiryDate || null,
+        })),
+        {
+          warehouseId: String(cn.warehouseId),
+          reason: cn.reason || undefined,
+          sourceType: "Credit Note",
+          sourceRef: cn.cnNumber || undefined,
+          sourceId: String(cn._id),
+          originalInvoiceId: cn.originalInvoiceId ? String(cn.originalInvoiceId) : undefined,
+          customerId: cn.customerId ? String(cn.customerId) : undefined,
+          currency: cn.currency || "SAR",
+        },
+        scope
+      );
     }
 
     const accountsReceivable = await ensureAccountsReceivable(scope, actor);
@@ -385,6 +415,27 @@ const updateStatus = async (
     if (cn.taxAmount) {
       const vatPayable = await ensureVatPayable(scope, actor);
       vatLines.push({ accountId: String(vatPayable._id), debit: cn.taxAmount, credit: 0 });
+    }
+    // Resalable returns put the goods (and their snapshotted cost) back on
+    // the balance sheet. Damaged/Expired/Other go to not-for-sale only —
+    // they are not Available, so the original sale's COGS stays.
+    const restocked = shouldRestock;
+    const cogs = restocked
+      ? Math.round(
+          (cn.products || []).reduce(
+            (sum, l) => sum + (Number(l.qty) || 0) * (Number(l.costPrice) || 0),
+            0
+          ) * 100
+        ) / 100
+      : 0;
+    const cogsLines = [];
+    if (cogs > 0) {
+      const inventoryAccount = await ensureInventory(scope, actor);
+      const cogsAccount = await ensureCostOfGoodsSold(scope, actor);
+      cogsLines.push(
+        { accountId: String(inventoryAccount._id), debit: cogs, credit: 0 },
+        { accountId: String(cogsAccount._id), debit: 0, credit: cogs }
+      );
     }
     await createJournalEntry({
       tenant: scope,
@@ -395,6 +446,7 @@ const updateStatus = async (
         { accountId: String(revenueAccount._id), debit: cn.subtotal || 0, credit: 0 },
         ...vatLines,
         { accountId: String(accountsReceivable._id), debit: 0, credit: cn.total || 0 },
+        ...cogsLines,
       ],
     });
 

@@ -10,7 +10,7 @@ import { buildSearchCondition, buildExactFilters } from "../../utility/helper/li
 import { adjustStock, getStockMapForWarehouse } from "../warehouse/stock-level-service";
 import { consumeBatch, releaseBatch } from "../inventory/stock-batch-service";
 import { createJournalEntry } from "../finance/journal-service";
-import { ensureAccountsReceivable, ensureVatPayable } from "../../utility/helper/finance-accounts";
+import { ensureAccountsReceivable, ensureVatPayable, ensureInventory, ensureCostOfGoodsSold } from "../../utility/helper/finance-accounts";
 import { toDateOnly, formatDateOnly } from "../../utility/helper/date-only";
 
 const POPULATE: [string, string][] = [
@@ -122,13 +122,12 @@ const effectiveLineTaxPercent = (line: { taxPercent?: number | null }, invoiceTa
 
 interface CreateSaleInvoiceInput {
   customerId: string;
-  date: string;
   warehouseId: string;
   receiverName?: string;
   products: SaleLineInput[];
   taxPercent?: number;
   shippingAddress?: string;
-  deliveryDate?: string;
+  deliveryDate: string;
   notes?: string;
   currency?: string;
   // Set only when this invoice was created via Quotation's manual "Continue
@@ -167,12 +166,28 @@ interface StockLineRef {
   batchId?: unknown;
 }
 
-// The one place that moves physical stock for a sale — used at create (stock
-// leaves the moment the sale is recorded, not only once Delivered), at
-// product edits (reverse the old products, re-apply the new ones), and at
-// Cancel (reverse everything). Batch-aware: a line pinned to a specific
-// batch moves that batch's remainingQty in the same direction as the
-// warehouse total.
+const resolveRefId = (value: unknown): string => {
+  if (value == null) return "";
+  if (typeof value === "object" && value !== null && "_id" in value) {
+    return String((value as { _id: unknown })._id);
+  }
+  return String(value);
+};
+
+const toStockLines = (products: unknown[]): StockLineRef[] =>
+  (products || []).map((raw) => {
+    const line = raw as StockLineRef;
+    return {
+      variantId: resolveRefId(line.variantId),
+      qty: Number(line.qty) || 0,
+      batchId: line.batchId ? resolveRefId(line.batchId) : undefined,
+    };
+  });
+
+// The one place that moves physical stock for a sale — Delivered subtracts,
+// Cancel/delete (when stockApplied) adds back. Batch remainingQty and the
+// warehouse StockLevel total always move together, using the batch's own
+// variant/warehouse when a line is pinned to one.
 const applyStockForProducts = async (
   scope: TenantScope,
   warehouseId: string,
@@ -181,11 +196,24 @@ const applyStockForProducts = async (
   reason: string,
   actor: string
 ): Promise<void> => {
-  for (const line of products) {
-    await adjustStock(scope, String(line.variantId), warehouseId, direction, line.qty, reason, actor);
-    if (line.batchId) {
-      if (direction === "subtract") await consumeBatch(String(line.batchId), line.qty);
-      else await releaseBatch(String(line.batchId), line.qty);
+  for (const line of toStockLines(products)) {
+    const qty = Number(line.qty) || 0;
+    let variantId = String(line.variantId || "");
+    let targetWarehouseId = warehouseId;
+    const batchId = line.batchId ? String(line.batchId) : "";
+
+    if (batchId) {
+      const batch = await StockBatchModel.findById(batchId).lean();
+      if (batch) {
+        variantId = String(batch.variantId);
+        targetWarehouseId = String(batch.warehouseId);
+      }
+    }
+
+    await adjustStock(scope, variantId, targetWarehouseId, direction, qty, reason, actor);
+    if (batchId) {
+      if (direction === "subtract") await consumeBatch(batchId, qty);
+      else await releaseBatch(batchId, qty);
     }
   }
 };
@@ -235,6 +263,11 @@ const computeTotals = (products: { qty: number; price: number; taxAmount?: numbe
   return { subtotal, taxAmount, total: subtotal + taxAmount };
 };
 
+// Landed cost of the goods leaving inventory — qty × the snapshotted
+// per-line costPrice (batch unitCost, else variant weighted average).
+const goodsCost = (products: { qty?: number | null; costPrice?: number | null }[]) =>
+  Math.round(products.reduce((sum, l) => sum + (Number(l.qty) || 0) * (Number(l.costPrice) || 0), 0) * 100) / 100;
+
 // Stock leaves the warehouse at save time now (see create()/update()), so
 // this has to catch an oversell before that write happens, not after —
 // aggregating quantities per variant across all lines (the same variant can
@@ -246,7 +279,8 @@ const findStockShortages = async (
 ): Promise<StockShortage[]> => {
   const requestedByVariant = new Map<string, number>();
   for (const line of products) {
-    requestedByVariant.set(line.variantId, (requestedByVariant.get(line.variantId) || 0) + (Number(line.qty) || 0));
+    const variantId = String(line.variantId);
+    requestedByVariant.set(variantId, (requestedByVariant.get(variantId) || 0) + (Number(line.qty) || 0));
   }
 
   const availableMap = await getStockMapForWarehouse(
@@ -279,14 +313,18 @@ const findStockShortages = async (
   const requestedByBatch = new Map<string, number>();
   for (const line of products) {
     if (!line.batchId) continue;
-    requestedByBatch.set(line.batchId, (requestedByBatch.get(line.batchId) || 0) + (Number(line.qty) || 0));
+    const batchId = String(line.batchId);
+    requestedByBatch.set(batchId, (requestedByBatch.get(batchId) || 0) + (Number(line.qty) || 0));
   }
   if (requestedByBatch.size) {
     const batches = await StockBatchModel.find({ _id: { $in: Array.from(requestedByBatch.keys()) } }).lean();
     const batchById = new Map(batches.map((b) => [String(b._id), b]));
     for (const [batchId, requested] of requestedByBatch) {
       const batch = batchById.get(batchId);
-      const available = Number(batch?.remainingQty) || 0;
+      // Missing / wrong-warehouse batch is the same as 0 left — otherwise a
+      // stale or mistyped batchId would skip the check and oversell.
+      const sameWarehouse = batch && String(batch.warehouseId) === String(warehouseId);
+      const available = batch && sameWarehouse ? Number(batch.remainingQty) || 0 : 0;
       if (requested > available) {
         const variantId = batch?.variantId ? String(batch.variantId) : "";
         const variant = variantById.get(variantId);
@@ -322,7 +360,6 @@ const create = async (
   const invoice = await SaleInvoiceModel.create({
     invoiceNumber,
     customerId: data.customerId,
-    date: toDateOnly(data.date),
     warehouseId: data.warehouseId,
     receiverName: data.receiverName || null,
     products,
@@ -331,9 +368,9 @@ const create = async (
     taxAmount,
     total,
     shippingAddress: data.shippingAddress || null,
-    deliveryDate: data.deliveryDate ? toDateOnly(data.deliveryDate) : null,
+    deliveryDate: toDateOnly(data.deliveryDate),
     deliveryStatus: "Pending",
-    stockApplied: true,
+    stockApplied: false,
     paymentStatus: "Pending",
     paymentHistory: [],
     notes: data.notes || null,
@@ -345,16 +382,9 @@ const create = async (
     createdBy,
   });
 
-  // Stock leaves the warehouse the moment the sale is recorded — not only
-  // once it's later marked Delivered. deliveryStatus is now purely a
-  // tracking label (Pending -> InTransit -> Delivered), with Cancel as the
-  // one path that reverses this (see updateDeliveryStatus), only while
-  // still Pending.
-  await applyStockForProducts(scope, data.warehouseId, products, "subtract", `Sale Invoice ${invoiceNumber} — created`, createdBy);
-
-  // Revenue is recognized at creation — Sales has no separate Draft/Sent
-  // stage the way Finance's own Customer Invoice does, so "created" is the
-  // moment the sale is real. Delivery only affects physical stock.
+  // Invoice create is the billing event (AR / Revenue / VAT). Stock and
+  // COGS wait until Delivered — In Transit is tracking only. Cancel while
+  // still Pending/InTransit reverses this journal; stock was never taken.
   const accountsReceivable = await ensureAccountsReceivable(scope, createdBy);
   const revenueAccount = await getRevenueAccount(scope);
   const vatLines = [];
@@ -365,7 +395,7 @@ const create = async (
   await createJournalEntry({
     tenant: scope,
     createdBy,
-    date: new Date(data.date),
+    date: new Date(),
     memo: `Sale Invoice ${invoiceNumber}`,
     lines: [
       { accountId: String(accountsReceivable._id), debit: total, credit: 0 },
@@ -397,7 +427,7 @@ const getAll = async (
       deliveryStatus: "deliveryStatus",
       paymentStatus: "paymentStatus",
     }),
-    ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
   };
 
   let cursor = SaleInvoiceModel.find(query).skip(startIndex).limit(limit).sort({ createdAt: -1 });
@@ -435,11 +465,11 @@ const getCollectedTaxReport = async (
     deliveryStatus: { $ne: "Cancelled" },
     ...buildSearchCondition(options.search, ["invoiceNumber"]),
     ...buildExactFilters(options as Record<string, unknown>, { customerId: "customerId" }),
-    ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
+    ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
   };
 
   const startIndex = (page - 1) * limit;
-  let cursor = SaleInvoiceModel.find(query).skip(startIndex).limit(limit).sort({ date: -1 });
+  let cursor = SaleInvoiceModel.find(query).skip(startIndex).limit(limit).sort({ createdAt: -1 });
   for (const [field, select] of POPULATE) cursor = cursor.populate(field, select) as any;
   const data = await cursor.lean();
   const count = await SaleInvoiceModel.countDocuments(query);
@@ -465,11 +495,12 @@ const getReceivables = async (
 ): Promise<{ totalCount: number; totalBalanceDue: number; totalRefundDue: number; result: saleInvoiceDto[] }> => {
   const query = {
     ...filter,
+    deliveryStatus: { $ne: "Cancelled" },
     ...buildSearchCondition(options.search, ["invoiceNumber"]),
     ...buildExactFilters(options as Record<string, unknown>, { customerId: "customerId" }),
   };
 
-  let cursor = SaleInvoiceModel.find(query).sort({ date: 1 });
+  let cursor = SaleInvoiceModel.find(query).sort({ createdAt: 1 });
   for (const [field, select] of POPULATE) cursor = cursor.populate(field, select) as any;
   const data = await cursor.lean();
 
@@ -500,18 +531,32 @@ const get = async (id: string, filter: Record<string, unknown>): Promise<saleInv
   const creditNotes = await CreditNoteModel.find({ originalInvoiceId: id, status: { $ne: "Voided" } }).populate("products.variantId", "variantName").lean();
   applyReturnFigures(dto, creditNotes.filter((cn) => cn.status === "Applied").reduce((sum, cn) => sum + (cn.total || 0), 0));
   dto.returnedItems = creditNotes.flatMap((cn) =>
-    (cn.products || []).map((line: any) => ({
-      cnId: String(cn._id),
-      cnNumber: cn.cnNumber || null,
-      cnStatus: cn.status || null,
-      date: formatDateOnly(cn.date),
-      reason: cn.reason || null,
-      variantId: String(line.variantId?._id || line.variantId),
-      productName: line.productName || null,
-      qty: line.qty,
-      price: line.price,
-      costPrice: line.costPrice ?? 0,
-    }))
+    (cn.products || []).map((line: any) => {
+      const qty = Number(line.qty) || 0;
+      const price = Number(line.price) || 0;
+      const subtotal = round2(qty * price);
+      const taxPercent =
+        line.taxPercent !== undefined && line.taxPercent !== null ? line.taxPercent : cn.taxPercent ?? null;
+      const taxAmount =
+        line.taxAmount != null ? Number(line.taxAmount) || 0 : round2(subtotal * ((Number(taxPercent) || 0) / 100));
+      return {
+        cnId: String(cn._id),
+        cnNumber: cn.cnNumber || null,
+        cnStatus: cn.status || null,
+        date: formatDateOnly(cn.date),
+        reason: cn.reason || null,
+        variantId: String(line.variantId?._id || line.variantId),
+        productName: line.productName || null,
+        qty,
+        price,
+        unit: line.unit || null,
+        costPrice: line.costPrice ?? 0,
+        taxPercent,
+        taxAmount,
+        subtotal,
+        lineTotal: round2(subtotal + taxAmount),
+      };
+    })
   );
   return dto;
 };
@@ -534,10 +579,12 @@ const update = async (
   }
   // deliveryStatus itself is deliberately never touched here — it only ever
   // changes through updateDeliveryStatus (the dedicated PATCH). Non-stock
-  // fields (customer, dates, notes, ...) stay editable at any status, but
-  // products move real stock (see below) so they're only safe to touch while
-  // still Pending — once InTransit/Delivered/Cancelled, products are frozen.
-  if (data.products !== undefined && invoice.deliveryStatus !== "Pending") {
+  // fields stay editable at any status. Products are frozen once Delivered
+  // (stock/COGS already posted) or Cancelled.
+  if (
+    data.products !== undefined &&
+    (invoice.deliveryStatus === "Delivered" || invoice.deliveryStatus === "Cancelled")
+  ) {
     return { errorCode: "invalid_status", result: null };
   }
 
@@ -547,25 +594,14 @@ const update = async (
   };
 
   if (data.products !== undefined) {
-    const oldWarehouseId = String(invoice.warehouseId);
-    const oldProducts = (invoice.products || []) as unknown as StockLineRef[];
-
-    // Release the old products' stock first — the shortage check below then
-    // sees true availability (including whatever this same edit is about to
-    // re-request), and if the new products don't fit, the old stock goes
-    // right back so a rejected edit never leaves anything stranded.
-    await applyStockForProducts(scope, oldWarehouseId, oldProducts, "add", `Sale Invoice ${invoice.invoiceNumber} — edit`, actor);
-
-    const newWarehouseId = data.warehouseId !== undefined ? data.warehouseId : oldWarehouseId;
+    const newWarehouseId = data.warehouseId !== undefined ? data.warehouseId : String(invoice.warehouseId);
     const shortages = await findStockShortages(scope, newWarehouseId, data.products);
     if (shortages.length) {
-      await applyStockForProducts(scope, oldWarehouseId, oldProducts, "subtract", `Sale Invoice ${invoice.invoiceNumber} — edit`, actor);
       return { errorCode: "insufficient_stock", result: null, shortages };
     }
   }
 
   if (data.customerId !== undefined) invoice.customerId = data.customerId as any;
-  if (data.date !== undefined) invoice.date = toDateOnly(data.date);
   if (data.warehouseId !== undefined) invoice.warehouseId = data.warehouseId as any;
   if (data.receiverName !== undefined) invoice.receiverName = data.receiverName;
   if (data.shippingAddress !== undefined) invoice.shippingAddress = data.shippingAddress;
@@ -580,7 +616,6 @@ const update = async (
     invoice.subtotal = subtotal;
     invoice.taxAmount = taxAmount;
     invoice.total = total;
-    await applyStockForProducts(scope, String(invoice.warehouseId), products as unknown as StockLineRef[], "subtract", `Sale Invoice ${invoice.invoiceNumber} — edit`, actor);
   }
 
   await invoice.save();
@@ -588,11 +623,11 @@ const update = async (
   return { errorCode: "success", result: mapDbToDto(invoice) };
 };
 
-// Status transitions only, now that stock leaves at creation (see create()).
-// Delivered is a terminal tracking label — locked once reached, same rule as
-// Purchase Invoice's Received lock. Cancel is the one path that reverses
-// stock, and only while still Pending — once InTransit or Delivered, the
-// order is physically moving/done and can no longer be cancelled.
+// Pending ↔ InTransit is tracking only. Delivered is the moment stock
+// leaves and COGS/Inventory post — locked afterwards, same as Purchase
+// Invoice's Received. Cancel is allowed from Pending or InTransit and
+// reverses the create() AR/Revenue/VAT journal. After Delivered, returns
+// go through a Credit Note.
 const updateDeliveryStatus = async (
   id: string,
   status: string,
@@ -609,35 +644,87 @@ const updateDeliveryStatus = async (
   if (invoice.deliveryStatus === "Cancelled" && status !== "Cancelled") {
     return { errorCode: "invalid_status", result: null };
   }
-  if (status === "Cancelled" && invoice.deliveryStatus !== "Pending") {
+  if (status === "Cancelled" && invoice.deliveryStatus !== "Pending" && invoice.deliveryStatus !== "InTransit") {
     return { errorCode: "invalid_status", result: null };
   }
 
-  if (status === "Cancelled" && invoice.stockApplied) {
-    const scope: TenantScope = {
-      adminId: invoice.adminId ? String(invoice.adminId) : null,
-      merchantId: invoice.merchantId ? String(invoice.merchantId) : null,
-    };
+  const scope: TenantScope = {
+    adminId: invoice.adminId ? String(invoice.adminId) : null,
+    merchantId: invoice.merchantId ? String(invoice.merchantId) : null,
+  };
+
+  if (status === "Delivered" && !invoice.stockApplied) {
+    const lines = toStockLines(invoice.products || []).map((l) => ({
+      variantId: String(l.variantId),
+      qty: l.qty,
+      price: 0,
+      batchId: l.batchId ? String(l.batchId) : undefined,
+    }));
+    const shortages = await findStockShortages(scope, String(invoice.warehouseId), lines);
+    if (shortages.length) {
+      return { errorCode: "insufficient_stock", result: null, shortages };
+    }
     await applyStockForProducts(
       scope,
       String(invoice.warehouseId),
-      (invoice.products || []) as unknown as StockLineRef[],
-      "add",
-      `Sale Invoice ${invoice.invoiceNumber} — cancelled`,
+      lines,
+      "subtract",
+      `Sale Invoice ${invoice.invoiceNumber} — delivered`,
       actor
     );
-    invoice.stockApplied = false;
+    const cogs = goodsCost((invoice.products || []) as { qty?: number | null; costPrice?: number | null }[]);
+    if (cogs > 0) {
+      const inventoryAccount = await ensureInventory(scope, actor);
+      const cogsAccount = await ensureCostOfGoodsSold(scope, actor);
+      await createJournalEntry({
+        tenant: scope,
+        createdBy: actor,
+        date: new Date(),
+        memo: `Sale Invoice ${invoice.invoiceNumber} — delivered`,
+        lines: [
+          { accountId: String(cogsAccount._id), debit: cogs, credit: 0 },
+          { accountId: String(inventoryAccount._id), debit: 0, credit: cogs },
+        ],
+      });
+    }
+    invoice.stockApplied = true;
+  }
 
-    // Reverses the exact Revenue/AR/VAT Payable entry create() posted — a
-    // cancelled sale never happened financially, so its Ledger footprint
-    // (and everything downstream: VAT summary, Collected Tax, financial
-    // reports) needs to go back to zero, not just its stock.
+  if (status === "Cancelled") {
+    const hadStockApplied = Boolean(invoice.stockApplied);
+    if (hadStockApplied) {
+      await applyStockForProducts(
+        scope,
+        String(invoice.warehouseId),
+        toStockLines(invoice.products || []),
+        "add",
+        `Sale Invoice ${invoice.invoiceNumber} — cancelled`,
+        actor
+      );
+      invoice.stockApplied = false;
+    }
+
     const accountsReceivable = await ensureAccountsReceivable(scope, actor);
     const revenueAccount = await getRevenueAccount(scope);
     const vatLines = [];
     if (invoice.taxAmount) {
       const vatPayable = await ensureVatPayable(scope, actor);
       vatLines.push({ accountId: String(vatPayable._id), debit: invoice.taxAmount, credit: 0 });
+    }
+    // Reverse COGS only when stock had already left (legacy invoices that
+    // posted COGS at create, or any path that set stockApplied). New
+    // invoices cancelled from Pending/InTransit never posted COGS.
+    const cogsLines = [];
+    if (hadStockApplied) {
+      const cogs = goodsCost((invoice.products || []) as { qty?: number | null; costPrice?: number | null }[]);
+      if (cogs > 0) {
+        const inventoryAccount = await ensureInventory(scope, actor);
+        const cogsAccount = await ensureCostOfGoodsSold(scope, actor);
+        cogsLines.push(
+          { accountId: String(inventoryAccount._id), debit: cogs, credit: 0 },
+          { accountId: String(cogsAccount._id), debit: 0, credit: cogs }
+        );
+      }
     }
     await createJournalEntry({
       tenant: scope,
@@ -648,6 +735,7 @@ const updateDeliveryStatus = async (
         { accountId: String(revenueAccount._id), debit: invoice.subtotal || 0, credit: 0 },
         ...vatLines,
         { accountId: String(accountsReceivable._id), debit: 0, credit: invoice.total || 0 },
+        ...cogsLines,
       ],
     });
   }
@@ -760,17 +848,19 @@ const addRefund = async (
   return { errorCode: "success", result: mapDbToDto(invoice) };
 };
 
-// Stock now leaves the warehouse at creation, so deleting a still-Pending
-// invoice must hand it back first — same reasoning as Cancel (in fact this
-// is only reachable pre-Delivery, same "still Pending" gate), and a
-// Cancelled invoice has already been reversed so deletion just needs no
-// further stock action. InTransit/Delivered can't be deleted at all.
+// Delete is allowed before stock leaves (Pending/InTransit) or after a
+// Cancel. Delivered invoices stay — corrections go through a Credit Note.
+// Legacy rows that already decremented stock at create still hand it back.
 const deleteByID = async (id: string, filter: Record<string, unknown>, actor: string): Promise<SaleInvoiceResult> => {
   const invoice = await SaleInvoiceModel.findOne({ _id: id, ...filter }).lean();
   if (!invoice) {
     return { errorCode: "not_found", result: null };
   }
-  if (invoice.deliveryStatus !== "Pending" && invoice.deliveryStatus !== "Cancelled") {
+  if (
+    invoice.deliveryStatus !== "Pending" &&
+    invoice.deliveryStatus !== "InTransit" &&
+    invoice.deliveryStatus !== "Cancelled"
+  ) {
     return { errorCode: "invalid_status", result: null };
   }
   if (invoice.stockApplied) {
@@ -781,7 +871,7 @@ const deleteByID = async (id: string, filter: Record<string, unknown>, actor: st
     await applyStockForProducts(
       scope,
       String(invoice.warehouseId),
-      (invoice.products || []) as unknown as StockLineRef[],
+      toStockLines(invoice.products || []),
       "add",
       `Sale Invoice ${invoice.invoiceNumber} — deleted`,
       actor
@@ -791,4 +881,4 @@ const deleteByID = async (id: string, filter: Record<string, unknown>, actor: st
   return { errorCode: "success", result: mapDbToDto(invoice) };
 };
 
-export { create, getAll, get, getReceivables, getCollectedTaxReport, getRawByCustomer, update, updateDeliveryStatus, addPayment, addRefund, deleteByID };
+export { create, getAll, get, getReceivables, getCollectedTaxReport, getRawByCustomer, update, updateDeliveryStatus, addPayment, addRefund, deleteByID, getCreditedAmounts, applyReturnFigures };

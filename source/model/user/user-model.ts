@@ -2,10 +2,18 @@ import mongoose, { Document, Schema, Model, model } from 'mongoose';
 
 export interface IUserModel extends Document {
   user_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
   email?: string | null
   phone?: string | null;
   cnic?: string | null;
   password?: string | null;
+  // The sub-user's assigned Role (see role-model.ts). Exactly one; the
+  // Account owner is the implicit "default user" and has no User row at all.
+  roleId?: mongoose.Types.ObjectId | null;
+  status?: "active" | "inactive" | null;
+  is_default_user?: boolean | null;
+  createdBy?: mongoose.Types.ObjectId | null;
   code?: string | null;
   code_generation_time?: Date | null;
   is_verified?: number | null;
@@ -27,6 +35,33 @@ const userSchema: Schema<IUserModel> = new Schema({
     user_name: {
       type: String,
       required: false,
+    },
+    first_name: {
+      type: String,
+      required: false,
+    },
+    last_name: {
+      type: String,
+      required: false,
+    },
+    roleId: {
+      type: Schema.Types.ObjectId,
+      ref: "Role",
+      default: null,
+    },
+    status: {
+      type: String,
+      enum: ["active", "inactive"],
+      default: "active",
+    },
+    is_default_user: {
+      type: Boolean,
+      default: false,
+    },
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: "Account",
+      default: null,
     },
     email: {
       type: String,

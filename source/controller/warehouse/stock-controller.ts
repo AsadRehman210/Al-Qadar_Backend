@@ -4,7 +4,7 @@ import { StockStatus } from "../../service/warehouse/stock-level-service";
 import { success, error, pagination } from "../../utility/helper/common";
 import { Messages } from "../../utility/helper/constants/message";
 import * as Enums from "../../utility/helper/constants/enum";
-import { resolveTenantScope, buildScopeFilter, RequestUser } from "../../utility/helper/tenant-scope";
+import { buildScopeFilter, RequestUser } from "../../utility/helper/tenant-scope";
 
 // GET /inventory/stock — variant x total qty x per-warehouse breakdown.
 const getAll = async (req: Request, res: Response): Promise<Response> => {
@@ -37,36 +37,6 @@ const getAll = async (req: Request, res: Response): Promise<Response> => {
       return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
     }
     return res.json(pagination(result.result, result.totalCount, page, limit));
-  } catch (err: any) {
-    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
-  }
-};
-
-// POST /inventory/stock/adjust — manual adjustment, delegates to adjustStock.
-const adjust = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    const { variantId, warehouseId, type, qty, reason } = req.body;
-    if (!variantId || !warehouseId || !type || qty === undefined) {
-      return res.json(error(Messages.MSG_INVALID_DATA, Enums.ErrorCode.failed));
-    }
-    const user = req.user as RequestUser;
-    const scope = resolveTenantScope(user, req.body);
-
-    const newQty = await stockLevelService.adjustStock(
-      scope,
-      variantId,
-      warehouseId,
-      type,
-      qty,
-      reason || "Manual Adjustment",
-      user.id
-    );
-
-    if (req.body.minQty !== undefined) {
-      await stockLevelService.setMinStock(scope, variantId, warehouseId, req.body.minQty);
-    }
-
-    return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.success, { qty: newQty }));
   } catch (err: any) {
     return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
   }
@@ -114,4 +84,4 @@ const summary = async (req: Request, res: Response): Promise<Response> => {
   }
 };
 
-export { getAll, adjust, adjustmentHistory, summary };
+export { getAll, adjustmentHistory, summary };

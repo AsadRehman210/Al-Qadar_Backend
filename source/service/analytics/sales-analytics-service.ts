@@ -83,7 +83,7 @@ const getTopProductsImpl = async (
   const match: Record<string, unknown> = {
     ...toAggregateFilter(filter),
     deliveryStatus: { $ne: "Cancelled" },
-    ...(Object.keys(dateMatch).length ? { date: dateMatch } : {}),
+    ...(Object.keys(dateMatch).length ? { createdAt: dateMatch } : {}),
   };
 
   const grouped = await SaleInvoiceModel.aggregate([
@@ -140,7 +140,7 @@ const getTopProductsPaginated = async (
   const match: Record<string, unknown> = {
     ...toAggregateFilter(filter),
     deliveryStatus: { $ne: "Cancelled" },
-    ...(Object.keys(dateMatch).length ? { date: dateMatch } : {}),
+    ...(Object.keys(dateMatch).length ? { createdAt: dateMatch } : {}),
   };
 
   const startIndex = (page - 1) * limit;
@@ -220,7 +220,7 @@ const getOverviewImpl = async (
   const match: Record<string, unknown> = {
     ...toAggregateFilter(filter),
     deliveryStatus: { $ne: "Cancelled" },
-    ...(Object.keys(dateMatch).length ? { date: dateMatch } : {}),
+    ...(Object.keys(dateMatch).length ? { createdAt: dateMatch } : {}),
   };
 
   const [totals] = await SaleInvoiceModel.aggregate([

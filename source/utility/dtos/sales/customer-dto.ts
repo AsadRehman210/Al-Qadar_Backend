@@ -17,6 +17,7 @@ export interface customerDto {
   creditDays?: number | null;
   status?: string | null;
   currentBalance?: number | null;
+  openingBalanceLocked?: boolean;
   createdAt?: Date | null;
   updatedAt?: Date | null;
 }

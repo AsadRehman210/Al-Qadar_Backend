@@ -9,7 +9,7 @@ import { adjustStock, getStockByVariant } from "../warehouse/stock-level-service
 import { updateCostWeightedAverage } from "../inventory/variant-service";
 import { addStockBatch, updateBatchExpiryBySource } from "../inventory/stock-batch-service";
 import { createJournalEntry } from "../finance/journal-service";
-import { ensureAccountsPayable, ensureVatReceivable, ensureCostOfGoodsSold } from "../../utility/helper/finance-accounts";
+import { ensureAccountsPayable, ensureVatReceivable, ensureInventory } from "../../utility/helper/finance-accounts";
 import { toDateOnly, formatDateOnly } from "../../utility/helper/date-only";
 
 const POPULATE: [string, string][] = [
@@ -111,8 +111,8 @@ interface CreatePurchaseInvoiceInput {
   taxPercent?: number;
   // true (default) = a real recoverable input-VAT credit — landed unit cost
   // stays net-of-tax, tax posts to VAT Receivable at Received. false = a
-  // blocked/non-recoverable cost — tax folds into the landed unit cost/COGS
-  // instead, no VAT Receivable line. Invoice-wide, set at creation, locked
+  // blocked/non-recoverable cost — tax folds into the landed unit cost /
+  // Inventory instead, no VAT Receivable line. Invoice-wide, set at creation, locked
   // once Received (see updateStatus).
   taxRecoverable?: boolean;
   notes?: string;
@@ -237,10 +237,31 @@ const getAll = async (
   return { totalCount: count, result };
 };
 
+// Applied debit notes reverse the same VAT Receivable the original bill
+// posted — grouped here so Recoverable Tax can net them off invoice.taxAmount
+// instead of showing the frozen billed figure after a return.
+const getAppliedReturnTaxByInvoice = async (
+  invoiceIds: string[]
+): Promise<Map<string, { tax: number; subtotal: number }>> => {
+  const map = new Map<string, { tax: number; subtotal: number }>();
+  if (!invoiceIds.length) return map;
+  const notes = await DebitNoteModel.find({
+    originalInvoiceId: { $in: invoiceIds },
+    status: "Applied",
+  }).select("originalInvoiceId taxAmount subtotal").lean();
+  for (const note of notes) {
+    const key = String(note.originalInvoiceId);
+    const cur = map.get(key) || { tax: 0, subtotal: 0 };
+    cur.tax = round2(cur.tax + (note.taxAmount || 0));
+    cur.subtotal = round2(cur.subtotal + (note.subtotal || 0));
+    map.set(key, cur);
+  }
+  return map;
+};
+
 // The "Recoverable Tax" module's own view — every Received invoice whose
-// tax is a real input-VAT credit, with the total across every matching
-// invoice (not just the current page) so the report's headline number is
-// always the true total, not just what's on screen.
+// tax is a real input-VAT credit, net of Applied debit notes, with the
+// headline total across every matching invoice (not just the current page).
 const getRecoverableTaxReport = async (
   filter: Record<string, unknown>,
   page: number,
@@ -261,16 +282,37 @@ const getRecoverableTaxReport = async (
     ...(Object.keys(dateFilter).length ? { date: dateFilter } : {}),
   };
 
-  const startIndex = (page - 1) * limit;
-  let cursor = PurchaseInvoiceModel.find(query).skip(startIndex).limit(limit).sort({ date: -1 });
+  let cursor = PurchaseInvoiceModel.find(query).sort({ date: -1 });
   for (const [field, select] of POPULATE) cursor = cursor.populate(field, select) as any;
   const data = await cursor.lean();
-  const count = await PurchaseInvoiceModel.countDocuments(query);
+  const returnedByInvoice = await getAppliedReturnTaxByInvoice(data.map((inv) => String(inv._id)));
 
-  const allMatching = await PurchaseInvoiceModel.find(query).select("taxAmount").lean();
-  const totalTaxAmount = round2(allMatching.reduce((sum, i) => sum + (i.taxAmount || 0), 0));
+  const withNet = data
+    .map((inv) => {
+      const ret = returnedByInvoice.get(String(inv._id)) || { tax: 0, subtotal: 0 };
+      return {
+        inv,
+        netTax: round2(Math.max(0, (inv.taxAmount || 0) - ret.tax)),
+        netSubtotal: round2(Math.max(0, (inv.subtotal || 0) - ret.subtotal)),
+        returnedTax: ret.tax,
+      };
+    })
+    .filter((row) => row.netTax > 0);
 
-  return { totalCount: count, totalTaxAmount, result: mapDbListToDtoList(data) };
+  const startIndex = (page - 1) * limit;
+  const result = withNet.slice(startIndex, startIndex + limit).map(({ inv, netTax, netSubtotal, returnedTax }) => {
+    const dto = mapDbToDto(inv);
+    dto.taxAmount = netTax;
+    dto.subtotal = netSubtotal;
+    dto.returnedTaxAmount = returnedTax;
+    return dto;
+  });
+
+  return {
+    totalCount: withNet.length,
+    totalTaxAmount: round2(withNet.reduce((sum, row) => sum + row.netTax, 0)),
+    result,
+  };
 };
 
 // The real Accounts Payable view — every Purchase Invoice actually still
@@ -331,6 +373,10 @@ const get = async (id: string, filter: Record<string, unknown>): Promise<purchas
       productName: line.productName || null,
       qty: line.qty,
       price: line.price,
+      taxPercent:
+        line.taxPercent !== undefined && line.taxPercent !== null ? line.taxPercent : dn.taxPercent ?? null,
+      taxAmount: line.taxAmount ?? 0,
+      lineTotal: round2((line.qty || 0) * (line.price || 0) + (line.taxAmount || 0)),
     }))
   );
   return dto;
@@ -410,7 +456,7 @@ const update = async (
 
 // Draft -> Ordered -> Transit -> Received. Received is the single moment
 // stock increases, the output variant's weighted-average cost updates, a
-// batch record is written, and the AP/COGS journal entry posts — guarded by
+// batch record is written, and the AP/Inventory journal entry posts — guarded by
 // stockApplied so it can only ever fire once.
 const updateStatus = async (
   id: string,
@@ -472,21 +518,22 @@ const updateStatus = async (
     }
 
     const accountsPayable = await ensureAccountsPayable(scope, actor);
-    const cogsAccount = await ensureCostOfGoodsSold(scope, actor);
+    const inventoryAccount = await ensureInventory(scope, actor);
     // Recoverable (default): tax is a real input-VAT credit — debited to
-    // VAT Receivable, separate from COGS. Non-recoverable: the tax is a real
-    // cost with nowhere else to go, so it stays folded into COGS instead —
-    // no VAT Receivable line at all. Either way COGS + VAT debit == AP
-    // credit, so the entry always balances.
+    // VAT Receivable, separate from Inventory. Non-recoverable: the tax is a
+    // real cost with nowhere else to go, so it stays folded into Inventory
+    // instead — no VAT Receivable line at all. Either way Inventory + VAT
+    // debit == AP credit, so the entry always balances. COGS is recognized
+    // later, when the goods are actually sold.
     const taxRecoverable = invoice.taxRecoverable !== false;
     const vatLines = [];
-    let cogsDebit = invoice.subtotal || 0;
+    let inventoryDebit = invoice.subtotal || 0;
     if (invoice.taxAmount) {
       if (taxRecoverable) {
         const vatReceivable = await ensureVatReceivable(scope, actor);
         vatLines.push({ accountId: String(vatReceivable._id), debit: invoice.taxAmount, credit: 0 });
       } else {
-        cogsDebit += invoice.taxAmount;
+        inventoryDebit += invoice.taxAmount;
       }
     }
     await createJournalEntry({
@@ -495,7 +542,7 @@ const updateStatus = async (
       date: new Date(),
       memo: `Purchase Invoice ${invoice.invoiceNumber}`,
       lines: [
-        { accountId: String(cogsAccount._id), debit: cogsDebit, credit: 0 },
+        { accountId: String(inventoryAccount._id), debit: inventoryDebit, credit: 0 },
         ...vatLines,
         { accountId: String(accountsPayable._id), debit: 0, credit: invoice.total || 0 },
       ],
@@ -623,4 +670,4 @@ const deleteByID = async (id: string, filter: Record<string, unknown>): Promise<
   return { errorCode: "success", result: mapDbToDto(invoice) };
 };
 
-export { create, getAll, get, getPayables, getRecoverableTaxReport, getRawBySupplier, update, updateStatus, addPayment, addRefund, deleteByID };
+export { create, getAll, get, getPayables, getRecoverableTaxReport, getRawBySupplier, update, updateStatus, addPayment, addRefund, deleteByID, getDebitedAmounts, applyReturnFigures };

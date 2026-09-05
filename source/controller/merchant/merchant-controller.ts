@@ -7,6 +7,7 @@ import {
   activateMerchant,
   deactivateMerchant,
   unlockMerchant,
+  unlockOpeningStockMerchant,
   recordPayment,
   getPaymentHistory,
   getAll,
@@ -140,6 +141,28 @@ const unlock = async (req: Request, res: Response): Promise<Response> => {
   }
 };
 
+const unlockOpeningStock = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const unlocker = {
+      id: req.user?.id as string,
+      role: req.user?.role as Enums.AccountRole,
+    };
+    const result = await unlockOpeningStockMerchant(req.params.id, unlocker);
+    if (result.errorCode === Enums.ErrorCode.not_exist) {
+      return res.json(error(Messages.MSG_MERCHANT_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === Enums.ErrorCode.no_access) {
+      return res.json(error(Messages.MSG_USER_IS_NOT_AUTHORIZED, Enums.ErrorCode.no_access));
+    }
+    if (result.errorCode === Enums.ErrorCode.failed) {
+      return res.json(error(Messages.MSG_OPENING_STOCK_NOT_IMPORTED, Enums.ErrorCode.failed));
+    }
+    return res.json(success(Messages.MSG_OPENING_STOCK_UNLOCKED, Enums.ErrorCode.updated, result.result));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
 const addPayment = async (req: Request, res: Response): Promise<Response> => {
   try {
     if (!req.body.amount || !req.body.date || !req.body.expiryDate) {
@@ -241,6 +264,7 @@ export {
   activate,
   deactivate,
   unlock,
+  unlockOpeningStock,
   addPayment,
   getPayments,
   getAllMerchants,

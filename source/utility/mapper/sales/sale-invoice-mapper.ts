@@ -19,7 +19,7 @@ const mapDbToDto = (dbModel: ISaleInvoiceModel): saleInvoiceDto => {
     invoiceNumber: dbModel.invoiceNumber || null,
     customerId: customer.id,
     customerName: customer.name,
-    date: formatDateOnly(dbModel.date),
+    date: formatDateOnly(dbModel.createdAt),
     warehouseId: warehouse.id,
     warehouseName: warehouse.name,
     receiverName: dbModel.receiverName || null,

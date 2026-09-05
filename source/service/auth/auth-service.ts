@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import { AccountModel } from "../../model/account/account-model";
+import { userModel } from "../../model/user/user-model";
 import { OtpModel } from "../../model/otp/otp-model";
 import { accountDto } from "../../utility/dtos/account/account-dto";
 import { mapDbToDto } from "../../utility/mapper/account/account-mapper";
@@ -29,7 +30,8 @@ const login = async (
   const account = await AccountModel.findOne({ email: email.toLowerCase() });
 
   if (!account) {
-    return { errorCode: Enums.ErrorCode.invalid_credentials, message: Messages.MSG_INVALID_CRED, result: null };
+    // No Account with this email — it may still be a sub-user login.
+    return loginAsSubUser(email.toLowerCase(), password, portal);
   }
 
   if (account.lock_until && account.lock_until.getTime() > Date.now()) {
@@ -83,10 +85,115 @@ const login = async (
     merchantId: account.role === Enums.AccountRole.merchant ? String(account._id) : null,
   });
 
+  // The Account owner is the implicit "default user" — full access, no Role.
+  accountDtoResult.is_default_user = true;
+  accountDtoResult.is_super_admin = account.role === Enums.AccountRole.super_admin;
+  accountDtoResult.permissions = [];
+
   return {
     errorCode: Enums.ErrorCode.success,
     message: Messages.MSG_LOGIN_SUCCESS,
     result: { account: accountDtoResult, token },
+  };
+};
+
+// A sub-user (see user-model.ts) logs in with their own email/password but
+// operates entirely inside their parent tenant. The JWT it issues carries the
+// PARENT's id/role/adminId so every downstream scope helper + requireRole keeps
+// working unchanged; `sub`/`isSubUser` mark it as delegated and drive
+// requirePermission (middleware/permission.ts).
+const loginAsSubUser = async (
+  email: string,
+  password: string,
+  portal?: Enums.AccountRole
+): Promise<LoginResult> => {
+  const user = await userModel.findOne({ email, action_type: { $ne: Enums.ActivityFlag.delete } }).populate({
+    path: "roleId",
+    select: "role_name permissions status",
+  });
+
+  if (!user) {
+    return { errorCode: Enums.ErrorCode.invalid_credentials, message: Messages.MSG_INVALID_CRED, result: null };
+  }
+
+  if (user.lock_until && user.lock_until.getTime() > Date.now()) {
+    return { errorCode: Enums.ErrorCode.locked_account, message: Messages.MSG_TEMP_ACCOUNT_BLOCKED, result: null };
+  }
+
+  // Resolve the parent Account this user belongs to.
+  let parent = null;
+  if (user.merchantId) {
+    parent = await AccountModel.findById(user.merchantId);
+  } else if (user.adminId) {
+    parent = await AccountModel.findById(user.adminId);
+  } else {
+    parent = await AccountModel.findOne({ role: Enums.AccountRole.super_admin });
+  }
+
+  if (!parent) {
+    return { errorCode: Enums.ErrorCode.invalid_credentials, message: Messages.MSG_INVALID_CRED, result: null };
+  }
+
+  await syncExpiredStatus(parent);
+  if (parent.status !== Enums.AccountStatus.active) {
+    return { errorCode: Enums.ErrorCode.de_active, message: Messages.MSG_USER_DEACTIVATED, result: null };
+  }
+
+  if (user.status !== "active") {
+    return { errorCode: Enums.ErrorCode.de_active, message: Messages.MSG_USER_DEACTIVATED, result: null };
+  }
+
+  if (portal && parent.role !== portal) {
+    return { errorCode: Enums.ErrorCode.unauthorized, message: Messages.MSG_PORTAL_MISMATCH, result: null };
+  }
+
+  const passwordMatches = await bcrypt.compare(password, user.password || "");
+  if (!passwordMatches) {
+    const attempts = (user.failed_attempts || 0) + 1;
+    if (attempts >= MAX_FAILED_ATTEMPTS) {
+      user.failed_attempts = 0;
+      user.lock_until = new Date(Date.now() + LOCK_DURATION_MS);
+    } else {
+      user.failed_attempts = attempts;
+    }
+    await user.save();
+    return { errorCode: Enums.ErrorCode.invalid_credentials, message: Messages.MSG_INVALID_CRED, result: null };
+  }
+
+  user.failed_attempts = 0;
+  user.lock_until = null;
+  await user.save();
+
+  const role = user.roleId as any;
+  const permissions: string[] = Array.isArray(role?.permissions) ? role.permissions : [];
+
+  const token = HelperFunctions.generateToken({
+    id: String(parent._id),
+    role: parent.role,
+    adminId: parent.adminId || null,
+    sub: String(user._id),
+    isSubUser: true,
+  });
+
+  const dto = mapDbToDto(parent);
+  dto.themeColor = await getTenantThemeColor({
+    adminId: parent.adminId ? String(parent.adminId) : parent.role === Enums.AccountRole.admin ? String(parent._id) : null,
+    merchantId: parent.role === Enums.AccountRole.merchant ? String(parent._id) : null,
+  });
+  // Identity is the sub-user's; tenant/branding context stays the parent's.
+  dto.userId = String(user._id);
+  dto.name = `${user.first_name || ""} ${user.last_name || ""}`.trim() || user.user_name || dto.name;
+  dto.email = user.email || null;
+  dto.phone = user.phone || dto.phone;
+  dto.is_default_user = false;
+  dto.is_super_admin = false;
+  dto.permissions = permissions;
+  dto.roleName = role?.role_name || null;
+
+  return {
+    errorCode: Enums.ErrorCode.success,
+    message: Messages.MSG_LOGIN_SUCCESS,
+    result: { account: dto, token },
   };
 };
 

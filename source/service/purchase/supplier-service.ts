@@ -1,11 +1,13 @@
 import { SupplierModel } from "../../model/purchase/supplier-model";
 import { PurchaseInvoiceModel } from "../../model/purchase/purchase-invoice-model";
+import { DebitNoteModel } from "../../model/purchase/debit-note-model";
 import { TenantScope } from "../../utility/helper/tenant-scope";
 import { supplierDto } from "../../utility/dtos/purchase/supplier-dto";
 import { mapDbToDto } from "../../utility/mapper/purchase/supplier-mapper";
 import { mapDbListToDtoList as mapInvoiceList } from "../../utility/mapper/purchase/purchase-invoice-mapper";
 import { buildSearchCondition, buildExactFilters } from "../../utility/helper/list-query";
 import { toDateOnly, formatDateOnly } from "../../utility/helper/date-only";
+import { getDebitedAmounts, applyReturnFigures } from "./purchase-invoice-service";
 
 export interface SupplierListOptions {
   search?: string;
@@ -77,14 +79,32 @@ const create = async (
   return { errorCode: "success", result: mapDbToDto(supplier, supplier.openingBalance || 0) };
 };
 
-// openingBalance + Σ(invoice.total) − Σ(payments across those invoices) —
-// always computed, never stored. Mirrors Customer's computeBalance exactly.
-const computeBalance = (openingBalance: number, invoices: { total?: number | null; paymentHistory?: { amount?: number | null }[] }[]) => {
+interface BalanceInvoice {
+  _id?: unknown;
+  total?: number | null;
+  paymentHistory?: { amount?: number | null }[];
+  refundHistory?: { amount?: number | null }[];
+}
+
+// openingBalance + Σ(invoice.total) − Σ(payments) − Σ(applied debit notes)
+// + Σ(refunds received from the supplier). Always computed, never stored.
+// Applied debit notes reduce what is owed; a cash refund from the supplier
+// after an overpayment brings the running position back toward zero.
+const computeBalance = (
+  openingBalance: number,
+  invoices: BalanceInvoice[],
+  debitedByInvoice: Map<string, number>
+) => {
   return invoices.reduce((bal, inv) => {
     const paid = (inv.paymentHistory || []).reduce((sum, p) => sum + (p.amount || 0), 0);
-    return bal + (inv.total || 0) - paid;
+    const refunded = (inv.refundHistory || []).reduce((sum, p) => sum + (p.amount || 0), 0);
+    const debited = inv._id ? debitedByInvoice.get(String(inv._id)) || 0 : 0;
+    return bal + (inv.total || 0) - paid - debited + refunded;
   }, openingBalance);
 };
+
+const loadAppliedDebits = async (invoices: BalanceInvoice[]) =>
+  getDebitedAmounts(invoices.map((inv) => String(inv._id)).filter((id) => id && id !== "undefined"));
 
 const getAll = async (
   filter: Record<string, unknown>,
@@ -110,7 +130,7 @@ const getAll = async (
 
   const supplierIds = data.map((s) => s._id);
   const invoices = await PurchaseInvoiceModel.find({ supplierId: { $in: supplierIds } })
-    .select("supplierId total paymentHistory")
+    .select("supplierId total paymentHistory refundHistory")
     .lean();
   const invoicesBySupplier = new Map<string, typeof invoices>();
   for (const inv of invoices) {
@@ -118,9 +138,10 @@ const getAll = async (
     if (!invoicesBySupplier.has(key)) invoicesBySupplier.set(key, []);
     invoicesBySupplier.get(key)!.push(inv);
   }
+  const debitedByInvoice = await loadAppliedDebits(invoices);
 
   const result = data.map((s) =>
-    mapDbToDto(s, computeBalance(s.openingBalance || 0, invoicesBySupplier.get(String(s._id)) || []))
+    mapDbToDto(s, computeBalance(s.openingBalance || 0, invoicesBySupplier.get(String(s._id)) || [], debitedByInvoice))
   );
 
   return { totalCount: count, result };
@@ -129,8 +150,9 @@ const getAll = async (
 const get = async (id: string, filter: Record<string, unknown>): Promise<supplierDto | null> => {
   const data = await SupplierModel.findOne({ _id: id, ...filter }).lean();
   if (!data) return null;
-  const invoices = await PurchaseInvoiceModel.find({ supplierId: id }).select("total paymentHistory").lean();
-  return mapDbToDto(data, computeBalance(data.openingBalance || 0, invoices));
+  const invoices = await PurchaseInvoiceModel.find({ supplierId: id }).select("total paymentHistory refundHistory").lean();
+  const debitedByInvoice = await loadAppliedDebits(invoices);
+  return mapDbToDto(data, computeBalance(data.openingBalance || 0, invoices, debitedByInvoice));
 };
 
 export interface InvoiceListOptions {
@@ -172,7 +194,12 @@ const getInvoices = async (
     .sort({ createdAt: -1 })
     .lean();
   const count = await PurchaseInvoiceModel.countDocuments(query);
-  return { totalCount: count, result: mapInvoiceList(data) };
+  const mapped = mapInvoiceList(data);
+  const debitedByInvoice = await getDebitedAmounts(mapped.map((d) => d.id));
+  return {
+    totalCount: count,
+    result: mapped.map((dto) => applyReturnFigures(dto, debitedByInvoice.get(dto.id) || 0)),
+  };
 };
 
 export interface PaymentListOptions extends InvoiceListOptions {}
@@ -224,13 +251,35 @@ const getPayments = async (
 export interface LedgerEntry {
   id: string;
   date: string | null;
-  type: "Invoice" | "Payment";
+  type: "Invoice" | "Payment" | "DebitNote" | "Refund";
   reference: string | null;
   debit: number;
   credit: number;
   runningBalance: number;
 }
 
+const LEDGER_TYPE_ORDER: Record<LedgerEntry["type"], number> = {
+  Invoice: 0,
+  Payment: 1,
+  DebitNote: 2,
+  Refund: 3,
+};
+
+const ledgerCalendarKey = (value: Date | string | null | undefined): string =>
+  formatDateOnly(value) || "";
+
+const compareLedgerEntries = (
+  a: { date: Date | string | null; type: LedgerEntry["type"] },
+  b: { date: Date | string | null; type: LedgerEntry["type"] }
+): number => {
+  const day = ledgerCalendarKey(a.date).localeCompare(ledgerCalendarKey(b.date));
+  if (day !== 0) return day;
+  const type = LEDGER_TYPE_ORDER[a.type] - LEDGER_TYPE_ORDER[b.type];
+  if (type !== 0) return type;
+  const at = a.date ? new Date(a.date).getTime() : 0;
+  const bt = b.date ? new Date(b.date).getTime() : 0;
+  return at - bt;
+};
 // GET /:id/ledger — dedicated, paginated statement of every debit (purchase
 // invoice) and credit (payment) for this supplier, oldest first, with a
 // running balance computed once server-side off the full history — mirrors
@@ -246,7 +295,11 @@ const getLedger = async (
     return { totalCount: 0, openingBalance: 0, result: [] };
   }
 
-  const invoices = await PurchaseInvoiceModel.find({ supplierId }).select("invoiceNumber date total paymentHistory").lean();
+  const invoices = await PurchaseInvoiceModel.find({ supplierId }).select("invoiceNumber date total paymentHistory refundHistory").lean();
+  const debitNotes = await DebitNoteModel.find({
+    supplierId,
+    status: "Applied",
+  }).select("dnNumber date total originalInvoiceId").lean();
 
   const invoiceEntries = invoices.map((inv) => ({
     id: `inv-${inv._id}`,
@@ -268,14 +321,30 @@ const getLedger = async (
     }))
   );
 
+  const debitNoteEntries = debitNotes.map((dn) => ({
+    id: `dn-${dn._id}`,
+    date: dn.date || null,
+    type: "DebitNote" as const,
+    reference: dn.dnNumber || null,
+    debit: 0,
+    credit: Number(dn.total) || 0,
+  }));
+
+  const refundEntries = invoices.flatMap((inv) =>
+    (inv.refundHistory || []).map((ref, idx) => ({
+      id: `ref-${inv._id}-${idx}`,
+      date: ref.date || null,
+      type: "Refund" as const,
+      reference: ref.reference || inv.invoiceNumber || null,
+      debit: Number(ref.amount) || 0,
+      credit: 0,
+    }))
+  );
+
   const openingBalance = Number(supplier.openingBalance) || 0;
   let runningBalance = openingBalance;
-  const entries: LedgerEntry[] = [...invoiceEntries, ...paymentEntries]
-    .sort((a, b) => {
-      const at = a.date ? new Date(a.date).getTime() : 0;
-      const bt = b.date ? new Date(b.date).getTime() : 0;
-      return at - bt;
-    })
+  const entries: LedgerEntry[] = [...invoiceEntries, ...paymentEntries, ...debitNoteEntries, ...refundEntries]
+    .sort(compareLedgerEntries)
     .map((e) => {
       runningBalance += e.debit - e.credit;
       return { ...e, date: formatDateOnly(e.date), runningBalance };
@@ -293,8 +362,9 @@ const getLedger = async (
 const getBalance = async (supplierId: string, filter: Record<string, unknown>): Promise<number | null> => {
   const supplier = await SupplierModel.findOne({ _id: supplierId, ...filter }).lean();
   if (!supplier) return null;
-  const invoices = await PurchaseInvoiceModel.find({ supplierId }).select("total paymentHistory").lean();
-  return computeBalance(supplier.openingBalance || 0, invoices);
+  const invoices = await PurchaseInvoiceModel.find({ supplierId }).select("total paymentHistory refundHistory").lean();
+  const debitedByInvoice = await loadAppliedDebits(invoices);
+  return computeBalance(supplier.openingBalance || 0, invoices, debitedByInvoice);
 };
 
 export interface DebitCreditSummary {
@@ -314,13 +384,14 @@ const getDebitCreditSummary = async (
 ): Promise<DebitCreditSummary | null> => {
   const supplier = await SupplierModel.findOne({ _id: supplierId, ...filter }).lean();
   if (!supplier) return null;
-  const invoices = await PurchaseInvoiceModel.find({ supplierId }).select("total paymentHistory").lean();
+  const invoices = await PurchaseInvoiceModel.find({ supplierId }).select("total paymentHistory refundHistory").lean();
   const openingBalance = supplier.openingBalance || 0;
   const totalPaid = invoices.reduce(
     (sum, inv) => sum + (inv.paymentHistory || []).reduce((s, p) => s + (p.amount || 0), 0),
     0
   );
-  return { openingBalance, totalPaid, balanceDue: computeBalance(openingBalance, invoices) };
+  const debitedByInvoice = await loadAppliedDebits(invoices);
+  return { openingBalance, totalPaid, balanceDue: computeBalance(openingBalance, invoices, debitedByInvoice) };
 };
 
 const getRaw = async (id: string, filter: Record<string, unknown>) => {

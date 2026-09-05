@@ -11,14 +11,18 @@ import { resolveTenantScope, buildScopeFilter, RequestUser } from "../../utility
 // reads.
 const describeShortages = (shortages: saleInvoiceService.StockShortage[] | undefined): string => {
   const detail = (shortages || [])
-    .map((s) => `${s.variantName || s.sku || s.variantId}: ${s.available} available, requested ${s.requested}`)
+    .map((s) => {
+      const name = s.variantName || s.sku || s.variantId || "item";
+      const batch = s.batchId ? " (this batch)" : "";
+      return `${name}${batch}: ${s.available} available, requested ${s.requested}`;
+    })
     .join("; ");
   return detail ? `${Messages.MSG_INSUFFICIENT_STOCK} ${detail}` : Messages.MSG_INSUFFICIENT_STOCK;
 };
 
 const create = async (req: Request, res: Response): Promise<Response> => {
   try {
-    if (!req.body.customerId || !req.body.warehouseId || !req.body.products?.length) {
+    if (!req.body.customerId || !req.body.warehouseId || !req.body.products?.length || !req.body.deliveryDate) {
       return res.json(error(Messages.MSG_INVALID_DATA, Enums.ErrorCode.failed));
     }
     const user = req.user as RequestUser;
@@ -187,6 +191,12 @@ const updateDeliveryStatus = async (req: Request, res: Response): Promise<Respon
 
     if (result.errorCode === "not_found") {
       return res.json(error(Messages.MSG_SALE_INVOICE_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "invalid_status") {
+      return res.json(error(Messages.MSG_INVALID_DELIVERY_STATUS, Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "insufficient_stock") {
+      return res.json(error(describeShortages(result.shortages), Enums.ErrorCode.failed));
     }
     return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result));
   } catch (err: any) {

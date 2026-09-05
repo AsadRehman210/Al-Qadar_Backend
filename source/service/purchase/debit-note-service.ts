@@ -8,7 +8,7 @@ import { buildSearchCondition, buildExactFilters } from "../../utility/helper/li
 import { adjustStock } from "../warehouse/stock-level-service";
 import { consumeBatch } from "../inventory/stock-batch-service";
 import { createJournalEntry } from "../finance/journal-service";
-import { ensureAccountsPayable, ensureVatReceivable, ensureCostOfGoodsSold } from "../../utility/helper/finance-accounts";
+import { ensureAccountsPayable, ensureVatReceivable, ensureInventory } from "../../utility/helper/finance-accounts";
 import { toDateOnly, formatDateOnly } from "../../utility/helper/date-only";
 
 const POPULATE: [string, string][] = [
@@ -79,12 +79,13 @@ interface DebitNoteResult {
   overReturns?: { variantId: string; requestedQty: number; maxReturnableQty: number }[];
 }
 
-// "Price discrepancy" is a pure billing correction — no physical item ever
-// moved. "Short shipment" means the goods were never actually received into
-// stock in the first place (the invoice overcharged for undelivered qty),
-// so there's nothing to remove either. Every other reason means stock that
-// WAS received is now physically going back to the supplier.
-const NO_STOCK_MOVEMENT_REASONS = new Set(["Price discrepancy", "Short shipment"]);
+// "Price discrepancy" / "Wrong entry" are pure billing corrections — no
+// physical item ever moved. "Short shipment" means the goods were never
+// actually received into stock in the first place (the invoice overcharged
+// for undelivered qty), so there's nothing to remove either. Every other
+// reason means stock that WAS received is now physically going back to the
+// supplier.
+const NO_STOCK_MOVEMENT_REASONS = new Set(["Price discrepancy", "Short shipment", "Wrong entry"]);
 
 const lineKey = (variantId: unknown) => String(variantId);
 
@@ -237,7 +238,44 @@ const get = async (id: string, filter: Record<string, unknown>): Promise<debitNo
   let cursor = DebitNoteModel.findOne({ _id: id, ...filter });
   for (const [field, select] of POPULATE) cursor = cursor.populate(field, select) as any;
   const data = await cursor.lean();
-  return data ? mapDbToDto(data) : null;
+  if (!data) return null;
+
+  const dto = mapDbToDto(data);
+  const invoiceId = data.originalInvoiceId ? String((data.originalInvoiceId as any)._id || data.originalInvoiceId) : null;
+  if (!invoiceId || !dto.products?.length) return dto;
+
+  const invoice = await PurchaseInvoiceModel.findById(invoiceId).select("products").lean();
+  const billedByKey = new Map<string, number>();
+  for (const line of invoice?.products || []) {
+    const key = lineKey(line.variantId);
+    billedByKey.set(key, (billedByKey.get(key) || 0) + (line.qty || 0));
+  }
+
+  // Only notes that existed before this one — later returns must not inflate
+  // "already debited" on an earlier DN (both would otherwise show 5/5).
+  const others = await DebitNoteModel.find({
+    originalInvoiceId: invoiceId,
+    status: { $ne: "Voided" },
+    _id: { $ne: data._id },
+    $or: [
+      { createdAt: { $lt: data.createdAt } },
+      { createdAt: data.createdAt, dnNumber: { $lt: data.dnNumber } },
+    ],
+  }).select("products").lean();
+  const alreadyByKey = new Map<string, number>();
+  for (const note of others) {
+    for (const line of note.products || []) {
+      const key = lineKey(line.variantId);
+      alreadyByKey.set(key, (alreadyByKey.get(key) || 0) + (line.qty || 0));
+    }
+  }
+
+  dto.products = dto.products.map((line) => ({
+    ...line,
+    billedQty: billedByKey.get(line.variantId) ?? 0,
+    alreadyDebitedQty: alreadyByKey.get(line.variantId) ?? 0,
+  }));
+  return dto;
 };
 
 // What the Add Debit Note form actually renders: the original purchase
@@ -374,11 +412,23 @@ const updateStatus = async (
     }
 
     const accountsPayable = await ensureAccountsPayable(scope, actor);
-    const cogsAccount = await ensureCostOfGoodsSold(scope, actor);
+    const inventoryAccount = await ensureInventory(scope, actor);
+    // Mirror the original purchase's tax treatment so a return unwinds the
+    // same accounts: recoverable tax credits VAT Receivable; non-recoverable
+    // tax was inside Inventory and comes back out of Inventory.
+    const original = dn.originalInvoiceId
+      ? await PurchaseInvoiceModel.findById(dn.originalInvoiceId).select("taxRecoverable").lean()
+      : null;
+    const taxRecoverable = original?.taxRecoverable !== false;
     const vatLines = [];
+    let inventoryCredit = dn.subtotal || 0;
     if (dn.taxAmount) {
-      const vatReceivable = await ensureVatReceivable(scope, actor);
-      vatLines.push({ accountId: String(vatReceivable._id), debit: 0, credit: dn.taxAmount });
+      if (taxRecoverable) {
+        const vatReceivable = await ensureVatReceivable(scope, actor);
+        vatLines.push({ accountId: String(vatReceivable._id), debit: 0, credit: dn.taxAmount });
+      } else {
+        inventoryCredit += dn.taxAmount;
+      }
     }
     await createJournalEntry({
       tenant: scope,
@@ -387,7 +437,7 @@ const updateStatus = async (
       memo: `Debit Note ${dn.dnNumber} — ${dn.reason || "return"}`,
       lines: [
         { accountId: String(accountsPayable._id), debit: dn.total || 0, credit: 0 },
-        { accountId: String(cogsAccount._id), debit: 0, credit: dn.subtotal || 0 },
+        { accountId: String(inventoryAccount._id), debit: 0, credit: inventoryCredit },
         ...vatLines,
       ],
     });

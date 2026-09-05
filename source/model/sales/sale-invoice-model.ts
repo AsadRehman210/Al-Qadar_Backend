@@ -39,7 +39,6 @@ export interface ISalePaymentEntry {
 export interface ISaleInvoiceModel extends Document {
   invoiceNumber?: string | null;
   customerId?: mongoose.Types.ObjectId | null;
-  date?: Date | null;
   warehouseId?: mongoose.Types.ObjectId | null;
   receiverName?: string | null;
   products?: ISaleLine[];
@@ -102,7 +101,6 @@ const saleInvoiceSchema: Schema<ISaleInvoiceModel> = new Schema(
   {
     invoiceNumber: { type: String, required: true },
     customerId: { type: Schema.Types.ObjectId, ref: "Customer", required: true },
-    date: { type: Date, required: true },
     warehouseId: { type: Schema.Types.ObjectId, ref: "Warehouse", required: true },
     receiverName: { type: String, default: null },
     products: { type: [lineSchema], default: [] },
@@ -136,8 +134,8 @@ const saleInvoiceSchema: Schema<ISaleInvoiceModel> = new Schema(
 
 // Serves sale-invoice-service.ts's getAll list (tenant-scoped, sorted createdAt:-1).
 saleInvoiceSchema.index({ adminId: 1, merchantId: 1, createdAt: -1 });
-// Serves sale-invoice-service.ts's customer-statement query (tenant + customerId, sorted date:1).
-saleInvoiceSchema.index({ adminId: 1, merchantId: 1, customerId: 1, date: 1 });
+// Serves sale-invoice-service.ts's customer-statement query (tenant + customerId).
+saleInvoiceSchema.index({ adminId: 1, merchantId: 1, customerId: 1, createdAt: 1 });
 
 export const SaleInvoiceModel: Model<ISaleInvoiceModel> = model<ISaleInvoiceModel>(
   "SaleInvoice",

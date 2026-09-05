@@ -34,6 +34,11 @@ export interface IAccountModel extends Document {
   // period ends. See utility/helper/payment-expiry.ts for the enforcement.
   portalExpiryDate?: Date | null;
   lastPaymentDate?: Date | null;
+  // One-time opening-stock Excel import for this tenant. After a successful
+  // import the tenant cannot run it again until a parent unlocks it
+  // (Super Admin for an Admin; parent Admin or Super Admin for a Merchant).
+  openingStockImported?: boolean | null;
+  openingStockImportedAt?: Date | null;
   createdAt?: Date | null;
   updatedAt?: Date | null;
 }
@@ -136,6 +141,14 @@ const accountSchema: Schema<IAccountModel> = new Schema(
       default: null,
     },
     lastPaymentDate: {
+      type: Date,
+      default: null,
+    },
+    openingStockImported: {
+      type: Boolean,
+      default: false,
+    },
+    openingStockImportedAt: {
       type: Date,
       default: null,
     },

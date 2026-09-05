@@ -1,0 +1,31 @@
+export interface quarantineLotDto {
+  id: string;
+  lotNumber?: string | null;
+  status?: string | null;
+  variantId?: string | null;
+  variantName?: string | null;
+  sku?: string | null;
+  warehouseId?: string | null;
+  warehouseName?: string | null;
+  qty?: number | null;
+  remainingQty?: number | null;
+  reason?: string | null;
+  sourceType?: string | null;
+  sourceRef?: string | null;
+  sourceId?: string | null;
+  originalInvoiceId?: string | null;
+  originalInvoiceNumber?: string | null;
+  customerId?: string | null;
+  customerName?: string | null;
+  productName?: string | null;
+  costPrice?: number | null;
+  unit?: string | null;
+  expiryDate?: Date | null;
+  currency?: string | null;
+  productionOrderId?: string | null;
+  productionOrderNumber?: string | null;
+  adminId?: string | null;
+  merchantId?: string | null;
+  createdAt?: Date | null;
+  updatedAt?: Date | null;
+}

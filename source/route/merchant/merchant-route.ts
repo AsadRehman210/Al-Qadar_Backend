@@ -7,6 +7,7 @@ import {
   activate,
   deactivate,
   unlock,
+  unlockOpeningStock,
   addPayment,
   getPayments,
   getAllMerchants,
@@ -46,6 +47,12 @@ merchantRoute.patch("/:id/deactivate", verifyToken, requireRole(AccountRole.supe
 // Admin can always unlock; a Merchant's own parent Admin can too (enforced
 // in the service layer), but an unrelated Admin cannot.
 merchantRoute.patch("/:id/unlock", verifyToken, requireRole(AccountRole.super_admin, AccountRole.admin), unlock);
+merchantRoute.patch(
+  "/:id/unlock-opening-stock",
+  verifyToken,
+  requireRole(AccountRole.super_admin, AccountRole.admin),
+  unlockOpeningStock
+);
 
 // Payment recording is Super Admin or the Merchant's own Admin — the service
 // layer enforces an Admin can only pay for a Merchant that's actually theirs.

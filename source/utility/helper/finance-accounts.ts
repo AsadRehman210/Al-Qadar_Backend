@@ -96,9 +96,35 @@ const ensureAccountsPayable = async (
   });
 };
 
-// Cost of Goods Sold ("5300") — the debit side of a received Purchase
-// Invoice. New code, added for the Client & Vendor module — self-heals the
-// same way for every tenant, new or existing.
+// Inventory ("1300") — the asset that holds unsold goods. Purchase Invoice
+// Received debits this (not COGS); Sale Invoice credits it when the goods
+// actually leave. Self-heals for tenants created before this account existed.
+const ensureInventory = async (
+  scope: TenantScope,
+  createdBy: string
+): Promise<IChartOfAccountModel> => {
+  const existing = await ChartOfAccountModel.findOne({
+    adminId: scope.adminId,
+    merchantId: scope.merchantId,
+    code: "1300",
+  });
+  if (existing) return existing;
+  return ChartOfAccountModel.create({
+    code: "1300",
+    name: "Inventory",
+    type: "Asset",
+    subType: "current_asset",
+    parentId: null,
+    status: "Active",
+    adminId: scope.adminId,
+    merchantId: scope.merchantId,
+    createdBy,
+  });
+};
+
+// Cost of Goods Sold ("5300") — recognized at sale time (Dr COGS / Cr
+// Inventory), not when goods are purchased. Self-heals the same way for
+// every tenant, new or existing.
 const ensureCostOfGoodsSold = async (
   scope: TenantScope,
   createdBy: string
@@ -144,9 +170,9 @@ const ensureExpenseAccount = (code: string, name: string) => async (
   });
 };
 
-// Stock Issue reclassifies value already expensed as COGS into one of these
-// three, by issueType — makes shrinkage/internal-use/samples visible as
-// their own P&L line instead of blended invisibly into COGS.
+// Stock Issue writes inventory off the balance sheet into one of these
+// three, by issueType — shrinkage/internal-use/samples become their own
+// P&L line instead of sitting in Inventory or blending into COGS.
 const ensureInventoryLossExpense = ensureExpenseAccount("5310", "Inventory Loss & Write-off Expense");
 const ensureInternalUseExpense = ensureExpenseAccount("5320", "Internal Use Expense");
 const ensureSamplesExpense = ensureExpenseAccount("5330", "Samples & Marketing Expense");
@@ -228,6 +254,7 @@ export {
   ensureVatPayable,
   ensureVatReceivable,
   ensureAccountsPayable,
+  ensureInventory,
   ensureCostOfGoodsSold,
   ensureInventoryLossExpense,
   ensureInternalUseExpense,

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { create, getAll, get, update, complete, deleteByID } from "../../controller/inventory/production-controller";
+import { create, getAll, get, update, complete, reverse, deleteByID } from "../../controller/inventory/production-controller";
 import { verifyToken } from "../../../middleware/auth";
 import { requireRole } from "../../../middleware/role";
 import { AccountRole } from "../../utility/helper/constants/enum";
@@ -15,6 +15,7 @@ productionRoute
   .get("/:id", verifyToken, canRead, get)
   .put("/:id", verifyToken, canWrite, update)
   .post("/:id/complete", verifyToken, canWrite, complete)
+  .post("/:id/reverse", verifyToken, canWrite, reverse)
   .delete("/:id", verifyToken, canWrite, deleteByID);
 
 export default productionRoute;

@@ -316,6 +316,32 @@ const unlockMerchant = async (merchantId: string, unlocker: Creator): Promise<Me
   return { errorCode: Enums.ErrorCode.success, result: mapDbToDto(merchant) };
 };
 
+// Same parent hierarchy as login unlock: Super Admin always; a Merchant's
+// own Admin only. The Merchant cannot unlock itself. Independent of
+// lock_until — this only clears the one-time opening-stock import flag.
+const unlockOpeningStockMerchant = async (merchantId: string, unlocker: Creator): Promise<MerchantResult> => {
+  const merchant = await findMerchant(merchantId);
+  if (!merchant) {
+    return { errorCode: Enums.ErrorCode.not_exist, result: null };
+  }
+
+  if (unlocker.role === Enums.AccountRole.admin) {
+    const merchantAdminId = merchant.adminId ? String(merchant.adminId) : null;
+    if (merchantAdminId !== String(unlocker.id)) {
+      return { errorCode: Enums.ErrorCode.no_access, result: null };
+    }
+  }
+
+  if (!merchant.openingStockImported) {
+    return { errorCode: Enums.ErrorCode.failed, result: null };
+  }
+
+  merchant.openingStockImported = false;
+  merchant.openingStockImportedAt = null;
+  await merchant.save();
+  return { errorCode: Enums.ErrorCode.success, result: mapDbToDto(merchant) };
+};
+
 interface UpdateMerchantInput {
   name?: string;
   phone?: string;
@@ -445,6 +471,7 @@ export {
   activateMerchant,
   deactivateMerchant,
   unlockMerchant,
+  unlockOpeningStockMerchant,
   recordPayment,
   getPaymentHistory,
   getAll,

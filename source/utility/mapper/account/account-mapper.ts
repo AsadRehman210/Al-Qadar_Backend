@@ -26,6 +26,8 @@ const mapDbToDto = (dbModel: IAccountModel): accountDto => {
     last_login: dbModel.last_login || null,
     portalExpiryDate: dbModel.portalExpiryDate || null,
     lastPaymentDate: dbModel.lastPaymentDate || null,
+    openingStockImported: Boolean(dbModel.openingStockImported),
+    openingStockImportedAt: dbModel.openingStockImportedAt || null,
     createdAt: dbModel.createdAt || null,
     updatedAt: dbModel.updatedAt || null,
   };

@@ -260,6 +260,23 @@ const unlockAdmin = async (id: string): Promise<UnlockResult> => {
   return { errorCode: Enums.ErrorCode.success, result: mapDbToDto(admin) };
 };
 
+// Super Admin only (route-enforced). Clears the one-time opening-stock
+// import lock so the Admin can run the Excel import again. Does not touch
+// login lock_until — that is a separate unlock path.
+const unlockOpeningStockAdmin = async (id: string): Promise<UnlockResult> => {
+  const admin = await findAdmin(id);
+  if (!admin) {
+    return { errorCode: Enums.ErrorCode.not_exist, result: null };
+  }
+  if (!admin.openingStockImported) {
+    return { errorCode: Enums.ErrorCode.failed, result: null };
+  }
+  admin.openingStockImported = false;
+  admin.openingStockImportedAt = null;
+  await admin.save();
+  return { errorCode: Enums.ErrorCode.success, result: mapDbToDto(admin) };
+};
+
 interface RecordAdminPaymentInput {
   amount: number;
   method?: string;
@@ -323,6 +340,7 @@ export {
   activateAdmin,
   deactivateAdmin,
   unlockAdmin,
+  unlockOpeningStockAdmin,
   recordPayment,
   getPaymentHistory,
 };

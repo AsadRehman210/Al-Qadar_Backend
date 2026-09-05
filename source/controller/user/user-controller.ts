@@ -1,129 +1,132 @@
-import { Request, Response } from 'express';
-import {
-  post as postService,
-  getAll as getAllService,
-  get as getService,
-  deleteByID as deleteByIDService,
-} from '../../service/user/user-service';
-import { success, error, pagination } from '../../utility/helper/common';
-import { Messages } from '../../utility/helper/constants/message';
-import { HelperFunctions } from '../../utility/helper/helper-function';
+import { Request, Response } from "express";
+import * as userService from "../../service/user/user-service";
+import { success, error, pagination } from "../../utility/helper/common";
+import { Messages } from "../../utility/helper/constants/message";
 import * as Enums from "../../utility/helper/constants/enum";
-import { resolveTenantScope, buildScopeFilter, RequestUser } from "../../utility/helper/tenant-scope";
-import { BCRYPT_SALT_ROUNDS } from "../../utility/helper/constants/security";
-import bcrypt from "bcrypt";
+import { resolveTenantScope, buildOwnerScopeFilter, RequestUser } from "../../utility/helper/tenant-scope";
 
-const post = async (req: Request, res: Response): Promise<Response> => {
+const create = async (req: Request, res: Response): Promise<Response> => {
   try {
-    const body = req.body;
-    // Only hash when a password was actually provided — this endpoint is
-    // reused for both create and edit (edit sends no password when it isn't
-    // being changed), and bcrypt.hashSync(undefined, ...) throws.
-    if (body.password) {
-      body.password = bcrypt.hashSync(body.password, BCRYPT_SALT_ROUNDS);
-    } else {
-      delete body.password;
-    }
-
     const user = req.user as RequestUser;
-    const scope = resolveTenantScope(user, body);
-    const result = await postService(body, scope);
+    const scope = resolveTenantScope(user, req.body);
+    const result = await userService.create(req.body, scope, user.id);
 
-    if (result.errorCode === Enums.ErrorCode.updated) {
-      const data = success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result);
-      return res.json(data);
-    } else if (result.errorCode === Enums.ErrorCode.success) {
-      const data = success(Messages.MSG_SUCCESS, Enums.ErrorCode.success, result.result);
-      return res.json(data);
-    } else if (result.errorCode === Enums.ErrorCode.duplicate_entry) {
-      const data = error(Messages.MSG_DUPLICATE_ENTRY, Enums.ErrorCode.failed);
-      return res.json(data);
+    if (result.errorCode === "invalid") {
+      return res.json(error(Messages.MSG_INVALID_DATA, Enums.ErrorCode.failed));
     }
-    else {
-      const data = error(Messages.MSG_INVALID_CRED, Enums.ErrorCode.failed);
-      return res.json(data);
+    if (result.errorCode === "invalid_role") {
+      return res.json(error(Messages.MSG_ROLE_NOT_EXIST, Enums.ErrorCode.failed));
     }
+    if (result.errorCode === "duplicate_entry") {
+      return res.json(error(Messages.MSG_DUPLICATE_ENTRY, Enums.ErrorCode.duplicate_entry));
+    }
+    return res.json(success(Messages.MSG_SUCCESS, Enums.ErrorCode.success, result.result));
   } catch (err: any) {
-    const data = error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.failed, err.message);
-    return res.json(data);
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
   }
 };
 
 const getAll = async (req: Request, res: Response): Promise<Response> => {
   try {
-    const body = req.query;
-    if (!body.page || isNaN(Number(body.page)) || Number(body.page) < 0) {
-      body.page = "1";
-    }
-    if (!body.limit || isNaN(Number(body.limit)) || Number(body.limit) < 0) {
-      body.limit = "10";
-    }
-
     const user = req.user as RequestUser;
-    const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
-    const result = await getAllService(filter, parseInt(body.page as string), parseInt(body.limit as string));
+    const query = req.query as { page?: string; limit?: string; search?: string; status?: string };
+    const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
+    const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
 
-    if (!HelperFunctions.isNullOrEmptyArray(result.result)) {
-      const data = pagination(result.result, result.totalCount, Number(body.page), Number(body.limit));
-      return res.json(data);
-    } else {
-      const data = error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist);
-      return res.json(data);
+    const filter = buildOwnerScopeFilter(user);
+    // Sub-user session: never surface the caller's own User row in this module.
+    const excludeSelfId = user.isSubUser && user.sub ? String(user.sub) : null;
+    const result = await userService.getAll(filter, page, limit, {
+      search: query.search,
+      status: query.status,
+      excludeId: excludeSelfId,
+    });
+
+    if (!result.result.length) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
     }
+    return res.json(pagination(result.result, result.totalCount, page, limit));
   } catch (err: any) {
-    const data = error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.failed, err.message);
-    return res.json(data);
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
   }
 };
 
 const get = async (req: Request, res: Response): Promise<Response> => {
   try {
-    const id = req.query.id;
-    let result;
-    if (id) {
-      const user = req.user as RequestUser;
-      const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
-      result = await getService(id.toString(), filter);
+    const user = req.user as RequestUser;
+    // Sub-user (is_default_user false) must not fetch their own detail via Users API.
+    if (user.isSubUser && user.sub && String(user.sub) === String(req.params.id)) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
     }
-
-    if (result) {
-      const data = success(Messages.MSG_DATA_FOUND, Enums.ErrorCode.success, result);
-      return res.json(data);
-    } else {
-      const data = error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist);
-      return res.json(data);
+    const result = await userService.get(req.params.id, buildOwnerScopeFilter(user));
+    if (!result) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
     }
+    return res.json(success(Messages.MSG_DATA_FOUND, Enums.ErrorCode.success, result));
   } catch (err: any) {
-    const data = error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.failed, err.message);
-    return res.json(data);
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const update = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    if (user.isSubUser && user.sub && String(user.sub) === String(req.params.id)) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    const result = await userService.update(req.params.id, req.body, buildOwnerScopeFilter(user));
+
+    if (result.errorCode === "not_found") {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "invalid") {
+      return res.json(error(Messages.MSG_INVALID_DATA, Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "invalid_role") {
+      return res.json(error(Messages.MSG_ROLE_NOT_EXIST, Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "duplicate_entry") {
+      return res.json(error(Messages.MSG_DUPLICATE_ENTRY, Enums.ErrorCode.duplicate_entry));
+    }
+    return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const changeStatus = (status: "active" | "inactive") => async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    if (user.isSubUser && user.sub && String(user.sub) === String(req.params.id)) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    const result = await userService.setStatus(req.params.id, buildOwnerScopeFilter(user), status);
+    if (result.errorCode === "not_found") {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
   }
 };
 
 const deleteByID = async (req: Request, res: Response): Promise<Response> => {
   try {
-    const id = req.body.id;
     const user = req.user as RequestUser;
-    const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
-    const result = await deleteByIDService(id, filter);
-
-    if (result?.trueOrFalse == true) {
-      const data = success(Messages.MSG_DELETE_SUCCESS, Enums.ErrorCode.success, result);
-      return res.json(data);
-    } else {
-      const data = error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist);
-      return res.json(data);
+    if (user.isSubUser && user.sub && String(user.sub) === String(req.params.id)) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
     }
+    const result = await userService.deleteByID(req.params.id, buildOwnerScopeFilter(user));
+    if (result.errorCode === "not_found") {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    return res.json(success(Messages.MSG_DELETE_SUCCESS, Enums.ErrorCode.success));
   } catch (err: any) {
-    const data = error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.failed, err);
-    return res.json(data);
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
   }
 };
 
+const activate = changeStatus("active");
+const deactivate = changeStatus("inactive");
 
-
-export {
-  post,
-  getAll,
-  get,
-  deleteByID
-};
+export { create, getAll, get, update, activate, deactivate, deleteByID };

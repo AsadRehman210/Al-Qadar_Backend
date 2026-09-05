@@ -25,6 +25,17 @@ export interface accountDto {
   last_login?: Date | null;
   portalExpiryDate?: Date | null;
   lastPaymentDate?: Date | null;
+  openingStockImported?: boolean;
+  openingStockImportedAt?: Date | null;
   createdAt?: Date | null;
   updatedAt?: Date | null;
+  // Auth-only fields — set by auth-service.ts on the login response, never by
+  // the plain mapper. `is_default_user` true = the Account owner (full access);
+  // false = a sub-user session, whose `permissions`/`roleName` come from their
+  // assigned Role. `is_super_admin` is what the super_admin portal keys on.
+  is_default_user?: boolean;
+  is_super_admin?: boolean;
+  permissions?: string[];
+  roleName?: string | null;
+  userId?: string | null;
 }

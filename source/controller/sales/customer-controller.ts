@@ -81,6 +81,9 @@ const update = async (req: Request, res: Response): Promise<Response> => {
     if (result.errorCode === "duplicate_phone") {
       return res.json(error(Messages.MSG_DUPLICATE_PHONE, Enums.ErrorCode.duplicate_entry));
     }
+    if (result.errorCode === "opening_balance_locked") {
+      return res.json(error(Messages.MSG_CUSTOMER_OPENING_BALANCE_LOCKED, Enums.ErrorCode.failed));
+    }
     return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result));
   } catch (err: any) {
     return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
@@ -114,6 +117,8 @@ const getInvoices = async (req: Request, res: Response): Promise<Response> => {
       toDate?: string;
       amount?: string;
       invoiceNumber?: string;
+      deliveryStatus?: string;
+      paymentStatus?: string;
     };
     const page = !query.page || isNaN(Number(query.page)) ? 1 : Number(query.page);
     const limit = !query.limit || isNaN(Number(query.limit)) ? 10 : Number(query.limit);
@@ -124,6 +129,8 @@ const getInvoices = async (req: Request, res: Response): Promise<Response> => {
       toDate: query.toDate,
       amount: query.amount !== undefined && query.amount !== "" ? Number(query.amount) : undefined,
       invoiceNumber: query.invoiceNumber,
+      deliveryStatus: query.deliveryStatus,
+      paymentStatus: query.paymentStatus,
     });
     if (!result.result.length) {
       return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));

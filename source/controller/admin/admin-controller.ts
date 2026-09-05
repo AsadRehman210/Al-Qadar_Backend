@@ -8,6 +8,7 @@ import {
   activateAdmin,
   deactivateAdmin,
   unlockAdmin,
+  unlockOpeningStockAdmin,
   recordPayment,
   getPaymentHistory,
 } from "../../service/admin/admin-service";
@@ -129,6 +130,21 @@ const unlock = async (req: Request, res: Response): Promise<Response> => {
   }
 };
 
+const unlockOpeningStock = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const result = await unlockOpeningStockAdmin(req.params.id);
+    if (result.errorCode === Enums.ErrorCode.not_exist) {
+      return res.json(error(Messages.MSG_NO_RECORD, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === Enums.ErrorCode.failed) {
+      return res.json(error(Messages.MSG_OPENING_STOCK_NOT_IMPORTED, Enums.ErrorCode.failed));
+    }
+    return res.json(success(Messages.MSG_OPENING_STOCK_UNLOCKED, Enums.ErrorCode.updated, result.result));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
 const addPayment = async (req: Request, res: Response): Promise<Response> => {
   try {
     if (!req.body.amount || !req.body.date || !req.body.expiryDate) {
@@ -157,4 +173,4 @@ const getPayments = async (req: Request, res: Response): Promise<Response> => {
   }
 };
 
-export { create, getAllAdmins, getAdminSummary, getAdmin, updateAdmin, activate, deactivate, unlock, addPayment, getPayments };
+export { create, getAllAdmins, getAdminSummary, getAdmin, updateAdmin, activate, deactivate, unlock, unlockOpeningStock, addPayment, getPayments };

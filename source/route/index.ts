@@ -1,5 +1,7 @@
 import express from "express";
+import { enforceModulePermissions } from "../../middleware/permission";
 import userRoute from "./user/user-route";
+import roleRoute from "./role/role-route";
 import authRoute from "./auth/auth-route";
 import adminRoute from "./admin/admin-route";
 import merchantRoute from "./merchant/merchant-route";
@@ -53,6 +55,8 @@ import categoryRoute from "./inventory/category-route";
 import productRoute from "./inventory/product-route";
 import variantRoute from "./inventory/variant-route";
 import productionRoute from "./inventory/production-route";
+import openingStockImportRoute from "./inventory/opening-stock-import-route";
+import quarantineLotRoute from "./inventory/quarantine-lot-route";
 import stockBatchRoute from "./inventory/stock-batch-route";
 import warehouseRoute from "./warehouse/warehouse-route";
 import stockRoute from "./warehouse/stock-route";
@@ -68,9 +72,12 @@ import purchaseInvoiceRoute from "./purchase/purchase-invoice-route";
 import debitNoteRoute from "./purchase/debit-note-route";
 const router = express.Router();
 
-
+// Blanket RBAC gate for sub-user sessions — owners and unauthenticated
+// requests pass straight through (see middleware/permission.ts).
+router.use(enforceModulePermissions);
 
 router.use("/user", userRoute);
+router.use("/role", roleRoute);
 router.use("/auth", authRoute);
 router.use("/admin", adminRoute);
 router.use("/merchant", merchantRoute);
@@ -124,6 +131,8 @@ router.use("/inventory/category", categoryRoute);
 router.use("/inventory/product", productRoute);
 router.use("/inventory/variant", variantRoute);
 router.use("/inventory/production", productionRoute);
+router.use("/inventory/opening-stock-import", openingStockImportRoute);
+router.use("/inventory/quarantine-lot", quarantineLotRoute);
 router.use("/inventory/stock-batch", stockBatchRoute);
 router.use("/warehouse/warehouse", warehouseRoute);
 router.use("/inventory/stock", stockRoute);

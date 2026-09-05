@@ -5,9 +5,19 @@ import { Messages } from "../../utility/helper/constants/message";
 import * as Enums from "../../utility/helper/constants/enum";
 import { resolveTenantScope, buildScopeFilter, RequestUser } from "../../utility/helper/tenant-scope";
 
+const describeShortages = (shortages: productionService.ProductionShortage[] | undefined): string => {
+  const detail = (shortages || [])
+    .map((s) => `${s.variantId}: ${s.available} available, requested ${s.requested}`)
+    .join("; ");
+  return detail ? `${Messages.MSG_INSUFFICIENT_STOCK} ${detail}` : Messages.MSG_INSUFFICIENT_STOCK;
+};
+
 const create = async (req: Request, res: Response): Promise<Response> => {
   try {
-    if (!req.body.outputVariantId || !req.body.outputQuantity || !req.body.warehouseId || !req.body.rawLines?.length) {
+    if (!req.body.outputVariantId || !req.body.outputQuantity || !req.body.warehouseId) {
+      return res.json(error(Messages.MSG_INVALID_DATA, Enums.ErrorCode.failed));
+    }
+    if (!req.body.quarantineLotId && !req.body.rawLines?.length) {
       return res.json(error(Messages.MSG_INVALID_DATA, Enums.ErrorCode.failed));
     }
 
@@ -19,6 +29,18 @@ const create = async (req: Request, res: Response): Promise<Response> => {
     }
     if (result.errorCode === "variant_not_found") {
       return res.json(error(Messages.MSG_PRODUCTION_VARIANT_NOT_FOUND, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "lot_not_found") {
+      return res.json(error(Messages.MSG_QUARANTINE_LOT_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "insufficient_quarantine") {
+      return res.json(error(Messages.MSG_QUARANTINE_INSUFFICIENT, Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "warehouse_mismatch") {
+      return res.json(error(Messages.MSG_QUARANTINE_WAREHOUSE_MISMATCH, Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "insufficient_stock") {
+      return res.json(error(describeShortages(result.shortages), Enums.ErrorCode.failed));
     }
     return res.json(success(Messages.MSG_SAVED, Enums.ErrorCode.success, result.result));
   } catch (err: any) {
@@ -84,6 +106,21 @@ const update = async (req: Request, res: Response): Promise<Response> => {
     if (result.errorCode === "invalid_status") {
       return res.json(error(Messages.MSG_INVALID_PRODUCTION_STATUS, Enums.ErrorCode.failed));
     }
+    if (result.errorCode === "warehouse_not_found") {
+      return res.json(error(Messages.MSG_PRODUCTION_WAREHOUSE_NOT_FOUND, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "lot_not_found") {
+      return res.json(error(Messages.MSG_QUARANTINE_LOT_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "insufficient_quarantine") {
+      return res.json(error(Messages.MSG_QUARANTINE_INSUFFICIENT, Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "warehouse_mismatch") {
+      return res.json(error(Messages.MSG_QUARANTINE_WAREHOUSE_MISMATCH, Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "insufficient_stock") {
+      return res.json(error(describeShortages(result.shortages), Enums.ErrorCode.failed));
+    }
     return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result));
   } catch (err: any) {
     return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
@@ -103,7 +140,34 @@ const complete = async (req: Request, res: Response): Promise<Response> => {
       return res.json(error(Messages.MSG_INVALID_PRODUCTION_STATUS, Enums.ErrorCode.failed));
     }
     if (result.errorCode === "insufficient_stock") {
-      return res.json(error(Messages.MSG_INSUFFICIENT_STOCK, Enums.ErrorCode.failed, result.shortages));
+      return res.json(error(describeShortages(result.shortages), Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "lot_not_found") {
+      return res.json(error(Messages.MSG_QUARANTINE_LOT_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "insufficient_quarantine") {
+      return res.json(error(Messages.MSG_QUARANTINE_INSUFFICIENT, Enums.ErrorCode.failed));
+    }
+    return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result));
+  } catch (err: any) {
+    return res.json(error(Messages.MSG_UNEXPECTED_ERROR, Enums.ErrorCode.exception, err.message));
+  }
+};
+
+const reverse = async (req: Request, res: Response): Promise<Response> => {
+  try {
+    const user = req.user as RequestUser;
+    const filter = buildScopeFilter(user, req.query as { adminId?: string; merchantId?: string });
+    const result = await productionService.reverse(req.params.id, filter, user.id);
+
+    if (result.errorCode === "not_found") {
+      return res.json(error(Messages.MSG_PRODUCTION_ORDER_NOT_EXIST, Enums.ErrorCode.not_exist));
+    }
+    if (result.errorCode === "invalid_status") {
+      return res.json(error(Messages.MSG_INVALID_PRODUCTION_STATUS, Enums.ErrorCode.failed));
+    }
+    if (result.errorCode === "output_consumed") {
+      return res.json(error(Messages.MSG_PRODUCTION_OUTPUT_CONSUMED, Enums.ErrorCode.failed));
     }
     return res.json(success(Messages.MSG_UPDATED, Enums.ErrorCode.updated, result.result));
   } catch (err: any) {
@@ -129,4 +193,4 @@ const deleteByID = async (req: Request, res: Response): Promise<Response> => {
   }
 };
 
-export { create, getAll, get, update, complete, deleteByID };
+export { create, getAll, get, update, complete, reverse, deleteByID };

@@ -16,6 +16,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: DefaultAccountSeed[] = [
   { code: "1100", name: "Accounts Receivable", type: "Asset", subType: "current_asset" },
   { code: "1150", name: "VAT Receivable", type: "Asset", subType: "vat_receivable" },
   { code: "1200", name: "Employee Loans Receivable", type: "Asset", subType: "current_asset" },
+  { code: "1300", name: "Inventory", type: "Asset", subType: "current_asset" },
   { code: "1500", name: "Fixed Assets", type: "Asset", subType: "fixed_asset" },
   { code: "1510", name: "Accumulated Depreciation", type: "Asset", subType: "contra_asset" },
   { code: "2000", name: "Accounts Payable", type: "Liability", subType: "current_liability" },
